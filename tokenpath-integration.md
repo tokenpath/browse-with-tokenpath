@@ -2,7 +2,7 @@
 
 > **Status (2026-07): live single-provider implementation.** TokenPath streams
 > generation from a messages-only `/v1/generate` request, then receives the
-> final answer once and returns a reusable attribution heatmap. One TokenPath
+> final answer once and returns reusable attribution spans. One TokenPath
 > key covers the complete flow.
 
 ## Current request flow
@@ -17,13 +17,11 @@ The extension uses four requests:
 2. `GET https://api.tokenpath.ai/v1/subscription` reads the Browse
    subscription's state and remaining monthly allowance.
 3. `POST https://api.tokenpath.ai/v1/generate` streams one answer.
-4. `POST https://api.tokenpath.ai/v1/attributions/heatmap` attributes that exact
+4. `POST https://api.tokenpath.ai/v1/attributions` attributes that exact
    final displayed answer once.
 
-The heatmap is cached with its assistant message. Selecting any span in the
-rendered answer aggregates the matrix locally and routes the resulting document
-character bounds to the source frame. A second answer selection does not make a
-second TokenPath request.
+The returned answer/source spans are cached with the assistant message. Clicking
+an attributed phrase routes its source bounds directly to the source frame.
 
 ## Authentication and errors
 
@@ -47,7 +45,7 @@ rate limits (`429`), network failures, cancellation, invalid responses, and
 subscription before it words anything, because the response says the request
 could not be paid for but not out of which pool; `spec.md` has the three
 messages that follow. A generation error is shown as an assistant
-error message. A heatmap error leaves the generated answer visible and marks
+error message. An attribution error leaves the generated answer visible and marks
 only its source map unavailable.
 
 TokenPath defaults to `https://api.tokenpath.ai`. For staging or local
@@ -178,7 +176,7 @@ prompt wording controls the intended length. An answer that produces every
 token it was allowed gets a note saying it reached the maximum answer length,
 and stays attributed. The client does not clip or replace the result: the exact
 terminal
-`done.answer` is used for the UI, conversation history, and heatmap request.
+`done.answer` is used for the UI, conversation history, and attribution request.
 
 ### The suggestions tail
 
@@ -207,31 +205,31 @@ complete block, a stray closing marker, and an opener the stream never closed
 are removed from each streaming delta and from the terminal answer, so:
 
 - the rendered answer never shows the marker, not even mid-stream;
-- `POST /v1/attributions/heatmap` receives the stripped answer — the block is
-  never part of the `answer` field, and the heatmap therefore never maps it;
+- `POST /v1/attributions` receives the stripped answer — the block is never
+  part of the `answer` field and therefore never receives attribution spans;
 - the conversation history and the cached page chat store the stripped answer;
   and
-- the `question` field of the heatmap request is the question **without** the
+- the `question` field of the attribution request is the question **without** the
   tail, because the tail is added to the outgoing message only.
 
 An answer that carries no block is passed through byte for byte. A malformed
 block yields no suggestions and never garbles the answer. The panel then keeps
 only candidates whose anchor quote occurs verbatim in the captured document and
-whose anchors lie outside the regions the answer's heatmap drew on, and shows at
+whose anchors lie outside the returned source regions, and shows at
 most two.
 
 Cancellation is not always discarding. Navigation, a newer capture, or
 disconnect drops the turn, but the composer's **Stop** button and a mid-stream
 network failure both keep the partial answer, flagged incomplete. Neither sends
-a heatmap request for it: attributing an unfinished answer would map text the
+an attribution request for it: attributing an unfinished answer would map text the
 model never produced.
 
-## TokenPath heatmap
+## TokenPath attribution spans
 
 The client sends:
 
 ```http
-POST /v1/attributions/heatmap
+POST /v1/attributions
 ```
 
 ```json
@@ -242,77 +240,46 @@ POST /v1/attributions/heatmap
 }
 ```
 
-An optional `threshold` from `0` through `1` is supported by the client, though
-the panel currently uses the service default. The expected response is a sparse
-COO matrix plus token offset tables:
+The client deliberately sends neither `spans` nor `threshold`: TokenPath uses
+its defaults to discover source-bearing answer phrases. The expected response
+contains half-open UTF-16 ranges against the exact submitted strings:
 
 ```json
 {
-  "row": [0, 0, 1],
-  "col": [4, 5, 7],
-  "data": [0.82, 0.31, 0.64],
-  "shape": [2, 10],
-  "answer_offsets": [[0, 5], [6, 12]],
-  "document_offsets": [[0, 3], [4, 8], [9, 13]]
+  "offset_encoding": "utf-16",
+  "spans": [{
+    "answer": { "start": 13, "end": 16, "text": "18%" },
+    "source": {
+      "start": 32,
+      "end": 35,
+      "text": "18%",
+      "confidence": 0.82
+    }
+  }]
 }
 ```
 
-`shape[0]` is the answer-token count and `shape[1]` is the document-token count.
-Each `data[i]` connects answer token `row[i]` to document token `col[i]`.
-Offsets are half-open Unicode code-point bounds against the exact submitted
-strings, not JavaScript UTF-16 code units.
-
 The adapter verifies:
 
-- a positive two-dimensional shape;
-- equal `row`, `col`, and `data` lengths;
-- in-range integer token indices;
-- finite scores from `0` through `1`; and
-- offset-table lengths and in-range half-open character bounds.
-
-It then converts both complete offset tables to UTF-16 once. All rendered-answer
-mapping, heatmap aggregation, extraction-map indexing, and DOM `Range`
-boundaries are JavaScript-native after that point, including text following
-emoji or other astral-plane characters.
-
-## Local selection-to-source resolution
+- the response contains a spans array and uses UTF-16 offsets;
+- answer and source bounds are ordered, non-overlapping, integer, in-range, and
+  slice to the returned `text` exactly;
+- confidences are finite values from `0` through `1`; and
+- a nullable source is accepted but omitted from clickable results.
 
 Rendered Markdown cannot be indexed directly because delimiters, entities,
 hidden destinations, and block structure alter its DOM text.
 `answer-selection.ts` builds a source-positioned visible-text map from the same
-GFM, then aligns selected Streamdown text nodes to it. This returns the exact raw
-UTF-16 range while excluding hidden link URLs and image metadata, and handles
-repeated phrases plus selections crossing emphasis, selectable links, inline or
-fenced code, decoded entities, and blocks.
-
-`panel-logic.js` mirrors the TokenPath service resolver for that answer range:
-
-1. Select every overlapping answer token.
-2. Sum its positive attribution mass for each document token.
-3. Choose the peak document token.
-4. Grow left and right across tokens carrying at least 25% of the peak,
-   bridging no more than three weaker tokens.
-5. Convert that token interval to document character bounds.
-6. Snap outward over adjacent alphanumeric characters.
-7. When the selected answer text occurs verbatim in the document, snap only to
-   an occurrence overlapping the attention-derived interval and choose the
-   nearest center.
-
-The last rule preserves occurrence-level disambiguation when text such as
-`Fable 5` appears more than once. It never replaces the heatmap with an
-unconstrained first-string match.
-
-The same cached heatmap also drives the answer's phrase list: `panel-logic.js`
-derives every attributed phrase from it, the panel underlines them in the
-rendered answer, and the **Sources (n)** control lists them for keyboard use.
-Clicking a phrase, activating a list entry, and selecting answer text all run
-the resolution above against the one cached matrix — no additional request in
-any case.
+GFM and maps each server-returned answer span to a DOM `Range`. This preserves
+underlines and pointer hit-testing across emphasis, links, code, entities,
+blocks, repeats, and Unicode. Clicking the range or activating its entry in the
+**Sources (n)** list sends the returned source span directly; arbitrary answer
+text selection is only a normal browser copy interaction.
 
 ## Capture and source navigation
 
 The originating `tabId`, `frameId`, and `captureId` are preserved from capture
-through generation, heatmap caching, and highlight routing. The immutable
+through generation, attribution caching, and highlight routing. The immutable
 attribution artifact also retains the exact canonical document and complete
 attribution prompt transcript used for that answer, and is what a restored
 page-chat replays: cached chats keep each distinct document once per record and
@@ -334,15 +301,15 @@ them in the fresh DOM. The same fail-closed rules apply, so a genuinely changed
 or vanished passage reports a failure rather than moving the highlight.
 
 Each navigation request also carries an opaque highlight ownership ID. Cleanup
-from an older answer selection can only remove the highlight it created, so
-rapid selections cannot let a delayed response clear the newer result.
+from an older attribution click can only remove the highlight it created, so
+rapid clicks cannot let a delayed response clear the newer result.
 
 ## Data and privacy
 
 TokenPath receives the exact extracted selection, rendered full-page text, or
 searchable full-PDF text, plus the generator instructions, bounded conversation
 text, current user request, and generated answer. Generation receives that
-context as role-based messages. The heatmap request receives the bare document,
+context as role-based messages. The attribution request receives the bare document,
 a `question` transcript containing the generator instructions, bounded
 conversation history, and clean current user request, plus the canonical answer.
 The internal follow-up-suggestion tail is excluded from that transcript.
@@ -353,6 +320,6 @@ map, or the user's native browser selection object.
 ## Separation of concerns
 
 `/v1/generate` returns plain answer text with no citations, marker syntax, or
-attribution spans. `/v1/attributions/heatmap` remains a separate,
-model-independent call. The old bundled `/v1/answer` flow and backend-selected
-fixed answer spans are not part of this architecture.
+attribution spans. `/v1/attributions` remains a separate, model-independent
+call that selects answer phrases and resolves their source spans. The old
+bundled `/v1/answer` flow is not part of this architecture.

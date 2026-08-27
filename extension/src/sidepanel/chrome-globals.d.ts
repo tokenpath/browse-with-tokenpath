@@ -1,12 +1,3 @@
-interface TokenPathHeatmap {
-  row: number[];
-  col: number[];
-  data: number[];
-  shape: [number, number];
-  documentOffsets: Array<[number, number]>;
-  answerOffsets: Array<[number, number]>;
-}
-
 interface TokenPathSummaryRequest {
   skip: boolean;
   maxOutputTokens?: number;
@@ -27,10 +18,15 @@ interface TokenPathGroundedSuggestion extends TokenPathSuggestionCandidate {
   end: number;
 }
 
-interface TokenPathAnswerAttributionPhrase {
+interface TokenPathAttributionRange {
   start: number;
   end: number;
-  confidence: number;
+  text: string;
+}
+
+interface TokenPathAttributionSpan {
+  answer: TokenPathAttributionRange;
+  source: TokenPathAttributionRange & { confidence: number };
 }
 
 interface TokenPathPanelLogicApi {
@@ -38,11 +34,6 @@ interface TokenPathPanelLogicApi {
   MAX_SUMMARY_INSTRUCTIONS_CHARS: number;
   SUGGESTION_CANDIDATES: number;
   boundSummaryInstructions(text: string): string;
-  buildAnswerAttributionPhrases(
-    heatmap: TokenPathHeatmap,
-    answer: string,
-    minimumMass?: number
-  ): TokenPathAnswerAttributionPhrase[];
   buildSummaryRequest(
     text: string,
     options?: {
@@ -54,10 +45,8 @@ interface TokenPathPanelLogicApi {
     candidates: TokenPathSuggestionCandidate[],
     document: string
   ): TokenPathGroundedSuggestion[];
-  heatmapCoveredRegions(
-    heatmap: TokenPathHeatmap | null,
-    document: string,
-    answer: string
+  attributionCoveredRegions(
+    attributions: TokenPathAttributionSpan[] | null
   ): Array<[number, number]>;
   parseSuggestions(answer: string): {
     answer: string;
@@ -71,9 +60,7 @@ interface TokenPathPanelLogicApi {
   selectSuggestions(
     candidates: TokenPathGroundedSuggestion[],
     options?: {
-      heatmap?: TokenPathHeatmap | null;
-      document?: string;
-      answer?: string;
+      attributions?: TokenPathAttributionSpan[] | null;
       max?: number;
     }
   ): TokenPathGroundedSuggestion[];
@@ -81,25 +68,6 @@ interface TokenPathPanelLogicApi {
   summaryPresetPrompt(preset: string): string;
   withSuggestionsTail(question: string): string;
   truncateCodePoints(text: string, maxCodePoints: number): string;
-  resolveHeatmapSpan(
-    heatmap: TokenPathHeatmap,
-    spanStart: number,
-    spanEnd: number,
-    document?: string | null,
-    answer?: string | null,
-    relativeThreshold?: number,
-    maxGap?: number,
-    contextMaxGap?: number
-  ): {
-    start: number;
-    end: number;
-    confidence: number;
-    /** The wider supported passage; always contains [start, end). */
-    contextStart: number;
-    contextEnd: number;
-  } | null;
-  codePointToUtf16Map(text: string): number[];
-  codePointOffsetToUtf16(map: number[], offset: number): number;
 }
 
 /**
@@ -165,13 +133,12 @@ interface TokenPathApi {
     };
     creditsRemaining: number | null;
   }>;
-  heatmap(input: {
+  attributions(input: {
     document: string;
     question: string;
     answer: string;
-    threshold?: number;
     signal?: AbortSignal;
-  }): Promise<TokenPathHeatmap>;
+  }): Promise<TokenPathAttributionSpan[]>;
 }
 
 declare const TokenPathPanelLogic: TokenPathPanelLogicApi;

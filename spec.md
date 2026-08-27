@@ -10,9 +10,8 @@ the rendered text of the originating page/frame or the entire top-level
 searchable PDF. A top-level YouTube watch page is captured as the video's
 subtitle transcript rather than as its page shell. The
 resulting side-panel chat is grounded in that source text. TokenPath streams
-each answer, then returns one answer-to-document heatmap. Clicking an attributed
-phrase, choosing one from the answer's **Sources** list, or selecting any part
-of an answer resolves that range against the cached heatmap, highlights its
+each answer, then returns selected answer/source spans. Clicking an attributed
+phrase or choosing one from the answer's **Sources** list highlights its returned
 supporting source range, and scrolls there in the live page or PDF — or, for a
 transcript capture, seeks the player to the caption cue that supports it.
 
@@ -90,19 +89,19 @@ transcript capture, seeks the player to the caption cue that supports it.
   custom highlights over attributable and hovered answer phrases;
   **`src/sidepanel/lib/source-copy.ts`** derives every user-facing source string
   from structured snapshot fields.
-- **`src/sidepanel/answer-selection.ts`** maps a DOM selection inside rendered
-  Streamdown Markdown back to the exact raw-answer character bounds.
+- **`src/sidepanel/answer-selection.ts`** maps raw-answer spans onto rendered
+  Streamdown Markdown ranges for underlines and pointer hit-testing.
 - **`src/sidepanel/components/ai-elements/`** contains the trimmed, editable AI
   Elements source used by the Chrome side panel.
 - **`sidepanel/panel.js`** and **`sidepanel/panel.css`** are generated,
   self-contained Vite assets loaded by the MV3 extension page.
 - **`sidepanel/panel-logic.js`** contains pure summary, Unicode-safe truncation,
-  heatmap-to-source span-resolution, and follow-up-suggestion helpers: the tail
+  and follow-up-suggestion helpers: the tail
   instruction, its parser, the verbatim-anchor gate, the coverage ranking, and
   the depth ladder's fixed-chip rule.
 - **`sidepanel/tokenpath.js`** calls TokenPath directly with the API key in
-  `chrome.storage.local`, streams messages-only generation, validates sparse
-  heatmaps, and adapts their offset tables for browser use. Every request it
+  `chrome.storage.local`, streams messages-only generation, and validates
+  returned UTF-16 attribution spans. Every request it
   makes carries `X-TokenPath-Client: browse-extension`, which is what spends the
   Browse subscription's monthly allowance before the account's credits, and
   `fetchSubscription()` reads that plan — treating a `404` as "no subscription"
@@ -225,11 +224,10 @@ and records every emitted character's raw node offset:
 `start` and `end` index the canonical extraction string in JavaScript UTF-16
 code units. The node map never crosses the extension-message boundary. The exact
 canonical string is sent as TokenPath's `document` and is not normalized again.
-TokenPath returns heatmap token offsets as Unicode code-point bounds. The API
-adapter converts the full answer and document offset tables against their exact
-strings before the panel aggregates a selected answer range or the content
-script resolves a DOM range. This prevents cumulative highlight drift after
-emoji while preserving repeated-string disambiguation.
+TokenPath returns resolved answer/source bounds in UTF-16 by default. The API
+adapter validates those bounds against their exact returned substrings before
+the panel maps an answer range or the content script resolves a DOM range. This
+prevents highlight drift after emoji while preserving occurrence identity.
 
 ## Summary and generation policy
 
@@ -382,7 +380,7 @@ them costs nothing.
 Every generation path — summaries and ordinary turns alike — appends one fixed
 tail after the question (or after the summary prompt and its suffix) when the
 setting is on. The tail is added to the outgoing user message only:
-conversation history, the cached chat, and the heatmap request all keep the
+conversation history, the cached chat, and the attribution request all keep the
 question the user actually asked. It requests four candidates in exactly this
 block:
 
@@ -412,12 +410,11 @@ Two client-side gates decide what survives, both fail-closed:
    written as spaces. A quote that is not found drops its whole candidate, so a
    fabricated citation can never become a chip. The match also yields the
    anchor's real character bounds in the document.
-2. **Coverage.** When the answer's heatmap arrives, its attributed phrases are
-   resolved to their supporting passages with the same helpers the underlined
-   phrases and the **Sources** list use, and the union is the region the answer
+2. **Coverage.** When the answer's attributions arrive, the union of their
+   returned source spans is the region the answer
    already drew on. An anchor overlapping that region is disqualified outright;
    the survivors are ranked by distance outside it and from each other, and the
-   best two are kept. Without a usable heatmap the ranking degrades to a
+   best two are kept. Without usable attributions the ranking degrades to a
    positional spread biased toward the later part of the document, which a
    summary is least likely to have reached.
 
@@ -449,7 +446,7 @@ summaries are switched off and the capture is therefore waiting. That is the
 same suppression the “Already concise” note uses, and both conditions apply
 independently.
 
-## Streaming generation and just-in-time heatmap attribution
+## Streaming generation and resolved-span attribution
 
 Only a toolbar capture starts a turn, and only when it has no saved chat to
 show instead. A context-menu capture's source may be inspected in the panel,
@@ -474,12 +471,12 @@ Two cancellations are deliberately *not* invalidations. The composer's **Stop**
 button aborts the request while keeping the question and whatever text had
 streamed, flagged `incomplete`; a mid-stream network failure keeps the same
 partial answer and reports the failure as a note beside it. Neither attributes
-the partial text — a heatmap over an unfinished answer would map words the model
+the partial text — attributing an unfinished answer would map words the model
 never wrote — so both leave the answer with no source map. An empty partial
 answer is removed instead of being kept.
 
 Once generation finishes, the panel sends one
-`POST /v1/attributions/heatmap` request:
+`POST /v1/attributions` request:
 
 ```js
 {
@@ -489,58 +486,44 @@ Once generation finishes, the panel sends one
 }
 ```
 
-The response is a sparse COO matrix:
+The request deliberately omits `spans` and `threshold`, so the service selects
+source-bearing answer phrases using its defaults. The response contains UTF-16
+answer/source spans:
 
 ```js
 {
-  row: [0, 0, 1],
-  col: [4, 5, 7],
-  data: [0.8, 0.3, 0.6],
-  shape: [answerTokenCount, documentTokenCount],
-  answer_offsets: [[0, 4], [5, 9]],
-  document_offsets: [[0, 3], [4, 8]]
+  offset_encoding: "utf-16",
+  spans: [{
+    answer: { start: 13, end: 16, text: "18%" },
+    source: { start: 32, end: 35, text: "18%", confidence: 0.82 }
+  }]
 }
 ```
 
-`sidepanel/tokenpath.js` validates matching COO lengths and matrix bounds, then
-converts both offset tables from Unicode code points to UTF-16. The immutable
-artifact `{document, question, answer, heatmap}` belongs to that assistant
+`sidepanel/tokenpath.js` validates encoding, bounds, exact substring text,
+ordering, overlap, and confidence. The immutable
+artifact `{document, question, answer, spans}` belongs to that assistant
 message. An attribution failure marks only its source map unavailable; the
 generated answer remains usable. Capture and generation epochs prevent a late
-heatmap from attaching to newer state.
+attribution response from attaching to newer state.
 
 Streamdown always renders the answer as Markdown. `answer-selection.ts` parses
 the same GFM into source-positioned visible leaves, excluding hidden link
 destinations and image metadata while decoding entities and escapes. It aligns
-Streamdown's text nodes to that visible map, so a user selection recovers exact
-raw-answer bounds across emphasis, selectable links, inline or fenced code,
-blocks, repeated phrases, and Unicode. Collapsed, empty, or out-of-answer
-selections are ignored.
-
-The local resolver mirrors TokenPath's service-side span policy:
-
-1. Find every answer token overlapping the selected raw-answer range.
-2. Sum its positive sparse attribution mass per document token.
-3. Start at the peak and grow across tokens at or above 25% of that peak,
-   bridging at most three weaker tokens.
-4. Convert the resolved token interval to document character bounds and snap
-   outward across adjacent alphanumeric characters.
-5. If the selected answer text occurs verbatim in the document, snap only to an
-   occurrence that overlaps the attention-derived interval, choosing the
-   nearest center when needed.
-
-The resolved range and confidence are computed entirely in the panel. Repeated
-answer selections reuse the same cached heatmap and make no more attribution
-requests. Streamdown's sanitizer and external-link confirmation remain active,
+Streamdown's text nodes to that visible map, so each returned answer span maps
+accurately across emphasis, links, inline or fenced code, blocks, repeated
+phrases, and Unicode. The returned source range and confidence are used
+directly; arbitrary answer selection is only a copy interaction. Streamdown's
+sanitizer and external-link confirmation remain active,
 remote images are suppressed, and rendered links are limited to HTTP(S) and
 mail links.
 
-A ready answer also exposes its attributed phrases directly. `panel-logic.js`
-derives them from the same cached heatmap; the panel maps each one to a `Range`
+A ready answer also exposes its attributed phrases directly. The panel maps
+each returned answer span to a `Range`
 in the rendered Markdown and paints them with two document-scoped CSS custom
 highlights (all attributable phrases, plus the one under the pointer or
-keyboard). Clicking a phrase runs the same resolution path as selecting its
-text. The **Sources (n)** toggle beside the answer lists those phrases as a
+keyboard). Clicking a phrase sends its returned source span. The **Sources (n)**
+toggle beside the answer lists those phrases as a
 `toolbar` with roving focus: arrow keys and Home/End move, Enter activates the
 focused phrase, and Escape closes the list and returns focus to the toggle. This
 is the keyboard-reachable equivalent of clicking, not a second attribution
@@ -554,7 +537,7 @@ erasing a newer highlight.
 ## Mutation and ambiguity policy
 
 Before highlighting, the content script verifies the route, stable source
-scope, rendered state, and mapped characters for the heatmap-resolved source
+scope, rendered state, and mapped characters for the server-resolved source
 span.
 Unrelated nodes elsewhere in the captured selection may hydrate or rerender
 without invalidating an unchanged target. A connected target Text node whose
@@ -577,7 +560,7 @@ Range still occupies the captured source path and raw offsets. Paths and
 occurrence order are hints, never sufficient evidence after a reorder. A stable
 source is never allowed to fall through to a page-wide match, where the same
 words might belong to another message, post, or article region. Fresh
-projections are built lazily on an answer selection and have source/candidate
+projections are built lazily on an attribution click and have source/candidate
 caps; the extension does not observe or mirror page mutations continuously.
 
 Identity-less captures may use a body-wide fallback only when the complete
@@ -614,8 +597,8 @@ highlight can still be cleared even though the frame holds no capture ID.
 
 ## Native PDF attribution
 
-The panel resolves PDF heatmaps with the same just-in-time aggregation used for
-web pages. The worker trims the resolved span, collapses line whitespace, and
+The panel uses returned PDF source spans exactly as it does for web pages. The
+worker trims the span, collapses line whitespace, and
 builds a standard PDF text fragment with bounded prefix/suffix context. Long
 spans use separate bounded start and end text, preventing unbounded navigation
 URLs. Fragment grammar punctuation is percent-encoded.
@@ -657,7 +640,7 @@ PDF support is limited to top-level, text-searchable files opened directly in
 Chrome's native viewer. Embedded PDFs are deliberately treated as ordinary
 pages so the extension can never navigate or reload their outer HTML tab.
 Scanned/image-only PDFs require OCR. Full-PDF source text comes from PDFium's
-own selection model, keeping generation/heatmap offsets aligned with the native
+own selection model, keeping attribution offsets aligned with the native
 viewer used for attribution. Context around a source span disambiguates most
 repeated phrases, but completely identical repeated passages cannot be
 guaranteed.
@@ -679,7 +662,7 @@ post-request balance.
 Chats are persisted per page in IndexedDB (`tokenpath-page-chats`, schema
 version 2: one record per page key, storing each distinct captured document once
 and referencing it from the messages that were attributed against it). A record
-holds the captured context, message list, bounded history, and cached heatmaps.
+holds the captured context, message list, bounded history, and cached attribution spans.
 An answer message may additionally carry the follow-up questions chosen for it
 and the depth rung a summary was produced at; both are optional additive
 fields, so records written before they existed restore unchanged and the schema

@@ -236,13 +236,13 @@ test("TokenPath identifies the extension on every request it makes", async () =>
         })
       );
     }
-    return jsonResponse(validHeatmap);
+    return jsonResponse(validAttributions);
   });
 
   await client.fetchCredits();
   await client.fetchSubscription();
   await client.generate({ messages: [{ role: "user", content: "question" }] });
-  await client.heatmap(heatmapInput);
+  await client.attributions(attributionInput);
 
   assert.deepEqual(
     seen.map((request) => request.path),
@@ -250,7 +250,7 @@ test("TokenPath identifies the extension on every request it makes", async () =>
       "http://localhost:8000/v1/me/credits",
       "http://localhost:8000/v1/subscription",
       "http://localhost:8000/v1/generate",
-      "http://localhost:8000/v1/attributions/heatmap",
+      "http://localhost:8000/v1/attributions",
     ]
   );
   for (const request of seen) {
@@ -578,71 +578,91 @@ test("TokenPath generate validates terminal done metadata", async () => {
   }
 });
 
-const heatmapInput = {
+const attributionInput = {
   document: "x🎓y漢",
   question: "Where?",
   answer: "🙂A🚀",
 };
-const validHeatmap = {
-  row: [0, 1],
-  col: [0, 1],
-  data: [0.25, 0.75],
-  shape: [2, 2],
-  answer_offsets: [
-    [0, 1],
-    [1, 3],
-  ],
-  document_offsets: [
-    [0, 2],
-    [2, 4],
+const validAttributions = {
+  offset_encoding: "utf-16",
+  spans: [
+    {
+      answer: { start: 0, end: 2, text: "🙂" },
+      source: { start: 1, end: 3, text: "🎓", confidence: 0.75 },
+    },
+    {
+      answer: { start: 2, end: 3, text: "A" },
+      source: { start: 3, end: 4, text: "y", confidence: 0.5 },
+    },
   ],
 };
 
-test("TokenPath validates COO data and converts both offset tables", async () => {
-  const client = tokenPathWith(async () => jsonResponse(validHeatmap));
-  const result = await client.heatmap(heatmapInput);
-
-  assert.deepEqual(plain(result), {
-    row: [0, 1],
-    col: [0, 1],
-    data: [0.25, 0.75],
-    shape: [2, 2],
-    answerOffsets: [
-      [0, 2],
-      [2, 5],
-    ],
-    documentOffsets: [
-      [0, 3],
-      [3, 5],
-    ],
+test("TokenPath validates and returns server-selected UTF-16 spans", async () => {
+  let request;
+  const client = tokenPathWith(async (url, options) => {
+    request = { url, body: JSON.parse(options.body) };
+    return jsonResponse(validAttributions);
   });
+  const result = await client.attributions(attributionInput);
+
+  assert.equal(request.url, "http://localhost:8000/v1/attributions");
+  assert.deepEqual(request.body, attributionInput);
+  assert.ok(!("threshold" in request.body));
+  assert.ok(!("spans" in request.body));
+  assert.deepEqual(plain(result), validAttributions.spans);
 });
 
-test("TokenPath rejects malformed sparse heatmaps", async () => {
+test("TokenPath rejects malformed attribution spans", async () => {
   const malformed = [
-    { ...validHeatmap, shape: [2] },
-    { ...validHeatmap, row: [0], col: [0, 1], data: [0.25, 0.75] },
-    { ...validHeatmap, row: [0, 2] },
-    { ...validHeatmap, col: [0, -1] },
-    { ...validHeatmap, data: [0.25, 1.1] },
-    { ...validHeatmap, answer_offsets: [[0, 1]] },
+    null,
+    {},
+    { spans: {}, offset_encoding: "utf-16" },
+    { ...validAttributions, offset_encoding: "utf-32" },
+    { ...validAttributions, spans: [null] },
     {
-      ...validHeatmap,
-      document_offsets: [
-        [0, 2],
-        [2, 5],
-      ],
+      ...validAttributions,
+      spans: [{ ...validAttributions.spans[0], answer: { start: 0, end: 2, text: "x" } }],
+    },
+    {
+      ...validAttributions,
+      spans: [{ ...validAttributions.spans[0], source: { ...validAttributions.spans[0].source, confidence: 1.1 } }],
+    },
+    {
+      ...validAttributions,
+      spans: [{
+        answer: { start: 0, end: 1, text: "\ud83d" },
+        source: validAttributions.spans[0].source,
+      }],
+    },
+    {
+      ...validAttributions,
+      spans: [validAttributions.spans[1], validAttributions.spans[0]],
     },
   ];
 
   for (const body of malformed) {
     const client = tokenPathWith(async () => jsonResponse(body));
     await expectClientError(
-      client.heatmap(heatmapInput),
+      client.attributions(attributionInput),
       "invalid_response",
       200
     );
   }
+});
+
+test("TokenPath accepts no spans and filters null source results", async () => {
+  const empty = tokenPathWith(async () =>
+    jsonResponse({ spans: [], offset_encoding: "utf-16" })
+  );
+  assert.deepEqual(plain(await empty.attributions(attributionInput)), []);
+
+  const unresolved = tokenPathWith(async () =>
+    jsonResponse({
+      spans: [{ answer: { start: 0, end: 2, text: "🙂" }, source: null }],
+      offset_encoding: "utf-16",
+    })
+  );
+  assert.deepEqual(plain(await unresolved.attributions(attributionInput)), []);
 });
 
 test("TokenPath reads a subscription, and a missing endpoint means none", async () => {
@@ -785,8 +805,8 @@ test("TokenPath caller abort remains active while JSON is read", async () => {
     stalledJsonResponse(options.signal, bodyStartedResolve)
   );
 
-  const pending = client.heatmap({
-    ...heatmapInput,
+  const pending = client.attributions({
+    ...attributionInput,
     signal: external.signal,
   });
   await bodyStarted;
@@ -807,7 +827,7 @@ test("TokenPath timeout remains active while JSON is read", async () => {
     { setTimeout: fastSetTimeout }
   );
 
-  const pending = client.heatmap(heatmapInput);
+  const pending = client.attributions(attributionInput);
   await bodyStarted;
   await expectClientError(pending, "timeout", 0);
 });

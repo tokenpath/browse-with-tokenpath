@@ -38,16 +38,14 @@ The files today:
   headings, and exact sub-sentence ranges without sentence expansion.
 - **`panel-logic.test.cjs`** checks the 24-word concise-source cutoff, the
   absence of a low summary output cap, code-point-safe truncation around emoji,
-  TokenPath code-point to browser UTF-16 offset conversion, CJK-dominant
-  handling, and the service-parity heatmap resolver across sparse mass,
-  weak-token gaps, repeated source text, missing mass, and emoji. It also
+  and CJK-dominant handling. It also
   covers the follow-up suggestions protocol: the Detailed preset and bounded
   custom instructions replacing the preset but never the shared suffix; the
   tail appended after every question; parsing a well-formed block, an absent
   one, malformed pairs, several blocks, a nested opener, a stream cut off
   mid-block or mid-marker, and CJK, emoji, curly-quoted, and bulleted lines;
   the verbatim anchor gate including whitespace-collapse and case sensitivity;
-  coverage ranking against a synthetic heatmap plus the positional fallback;
+  coverage ranking against returned attribution spans plus the positional fallback;
   and the depth ladder's fixed-chip rule.
 - **`controller-urls.test.cjs`** pins page identity: a plain `#section` anchor, a
   `:~:text=` directive, and PDF `#page`/`#zoom` anchors all keep one document
@@ -57,7 +55,7 @@ The files today:
 - **`api-clients.test.cjs`** exercises TokenPath's named generation SSE across
   byte-fragmented Unicode, terminal and error events, malformed/incomplete
   streams, caller cancellation, canonical `done.answer`, HTTP error details,
-  heatmap validation, code-point offset conversion, and cancellation or timeout
+  resolved-span validation, UTF-16/emoji bounds, and cancellation or timeout
   while a response body is still arriving.
 - **`pdf-text-extractor.test.cjs`** verifies fragment-free credentialed PDF
   downloads, signature and 50 MiB limits, strict native-viewer reply binding,
@@ -83,7 +81,7 @@ npm run test:e2e
 
 `e2e.mjs` loads representative fixtures, injects the real scripts behind a small
 Chrome API shim, and drives capture → optional streaming generation → cached
-heatmap → phrase click, **Sources** list, or arbitrary answer selection →
+server-selected spans → phrase click or **Sources** list →
 source-offset highlight. It covers:
 
 - side-panel bootstrap while `/credits` never resolves; a capture that waits
@@ -92,29 +90,28 @@ source-offset highlight. It covers:
   with no length control anywhere in the panel and nothing persisting the
   preference key it used to write;
   the already-concise note suppressing the starter; a messages-only TokenPath
-  `/v1/generate` request, split named SSE events, one TokenPath heatmap per
-  answer, and reuse of that heatmap across different answer selections; exact
-  raw-answer mapping across inline/fenced and indented code, real mouse
-  selection in link labels, bold delimiters, block crossings, decoded entities,
+  `/v1/generate` request, split named SSE events, one TokenPath attribution call
+  per answer with no threshold or explicit spans; exact raw-answer mapping
+  across inline/fenced and indented code, link labels, bold delimiters, block crossings, decoded entities,
   footnote definitions, hidden link destinations/image alt text, repeated text,
   and Unicode; serialized disconnect/key removal so a late delete cannot race a
   reconnect; collapsed-by-default source text with accessible expansion,
   automatic recollapse on replacement, always-visible capture errors,
-  narrow-panel layout, system/light/dark theme switching, code-point offset
-  conversion across a LinkedIn-shaped emoji, stale-seed rejection, and routing
+  narrow-panel layout, system/light/dark theme switching, UTF-16 attribution
+  across emoji, stale-seed rejection, and routing
   the resolved source range to the original tab and frame;
 - stopping a streaming answer and keeping the partial text marked incomplete,
   plus the keyboard path through the **Sources** list;
 - delayed auth cleanup after a newer capture, out-of-order credit reads, rapid
-  answer-selection responses, and content-script highlight ownership, proving
+  attribution-click responses, and content-script highlight ownership, proving
   stale async work cannot write into or clear newer UI state, plus side-panel
   teardown cleanup for owned page and PDF highlights;
 - native-PDF panel routing through the background worker, reuse of the normal
-  generation/heatmap path, same-document text-fragment and viewer-anchor
+  generation/attribution path, same-document text-fragment and viewer-anchor
   updates, explicit clearing, and genuine-navigation invalidation without
   bouncing the tab back to the old PDF;
 - full-PDF reading state, hidden native-viewer extraction, normal
-  generation/heatmap reuse, and replacement races where a newer capture aborts
+  generation/attribution reuse, and replacement races where a newer capture aborts
   the old read and ignores its delayed viewer reply;
 - full-page rendered-text capture that ignores a stale selection, includes
   visible non-selectable text, excludes hidden/script/style text, safely caps a
@@ -149,7 +146,7 @@ source-offset highlight. It covers:
   fragment-only changes, which are scroll position rather than a new document;
 - exact Range capture when Chrome's flattened selection hint omits an invisible
   character, followed by clearing the native page selection without losing
-  later heatmap-resolved highlighting;
+  later attribution highlighting;
 - a Substack-shaped late-injection selection spanning header and body, including
   CSS-uppercase dates, `user-select:none` reaction controls, and a visibly
   rendered `aria-hidden` ancestor;
@@ -161,7 +158,7 @@ source-offset highlight. It covers:
 **Auto-summary, follow-ups, and Settings** is a self-contained suite with its
 own browser and counters. It drives a toolbar capture through an automatic
 summary whose single generation call also carries the suggestions tail, and
-checks that the tail block reaches neither the rendered answer nor the heatmap
+checks that the tail block reaches neither the rendered answer nor the attribution
 request, that a fabricated anchor quote and one quoting the passage the answer
 already used both lose their slot, that the depth ladder takes slot one, that
 clicking a generated chip asks it as an ordinary turn and refreshes the row,
@@ -219,9 +216,9 @@ Settings gear, its switches, the Detailed preset, and custom instructions all
 behave against the live API.
 
 The pass should also verify the side panel, TokenPath HTTP/authentication flow,
-streamed Markdown, the three ways into attribution (clicking an underlined
-phrase, the **Sources** list by keyboard, and selecting answer text), repeated
-selections without new attribution calls, nested Gmail scrolling, detached-DOM
+streamed Markdown, both ways into attribution (clicking an underlined phrase
+and the **Sources** list by keyboard), ordinary answer selection remaining inert,
+nested Gmail scrolling, detached-DOM
 unique remapping, chat restore after leaving and returning to a page, working
 attribution after a page refresh, and searchable-PDF selection or full-document
 capture/highlight/clear behavior. Check that **Clear chat** affects only the

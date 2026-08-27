@@ -73,7 +73,7 @@ export interface MessageAttribution {
   document: string;
   question: string;
   status: "loading" | "ready" | "error";
-  heatmap?: TokenPathHeatmap;
+  spans?: TokenPathAttributionSpan[];
   error?: string;
 }
 
@@ -146,7 +146,7 @@ interface CachedMessageAttribution {
   documentIndex: number;
   question: string;
   status: MessageAttribution["status"];
-  heatmap?: TokenPathHeatmap;
+  spans?: TokenPathAttributionSpan[];
   error?: string;
 }
 
@@ -355,9 +355,9 @@ export class PanelController {
   private activeTurnCleanup: (() => void) | null = null;
   private activeTurnMessageId: string | null = null;
   private activePdfExtractionController: AbortController | null = null;
-  private heatmapControllers = new Map<string, AbortController>();
+  private attributionControllers = new Map<string, AbortController>();
   private navigationEpoch = 0;
-  // Grounded follow-up candidates awaiting their answer's heatmap. Kept off
+  // Grounded follow-up candidates awaiting their answer's attributions. Kept off
   // the message — and therefore out of the cache — because only the two
   // finally chosen questions are worth restoring.
   private suggestionCandidates = new Map<
@@ -805,58 +805,6 @@ export class PanelController {
   };
 
   resetSummaryInstructions = () => this.setSummaryInstructions("");
-
-  onAnswerSelection = async (
-    messageId: string,
-    answerStart: number,
-    answerEnd: number
-  ) => {
-    const message = this.snapshot.messages.find(
-      (candidate) => candidate.id === messageId
-    );
-    if (!message || message.kind !== "answer" || !message.source) return;
-    if (message.attribution?.status === "loading") {
-      this.showToast("The source map is still loading.");
-      return;
-    }
-    if (message.attribution?.status !== "ready" || !message.attribution.heatmap) {
-      this.showToast(
-        message.attribution?.error ||
-          "Source attribution is unavailable for this answer."
-      );
-      return;
-    }
-    if (
-      !Number.isInteger(answerStart) ||
-      !Number.isInteger(answerEnd) ||
-      answerStart < 0 ||
-      answerEnd <= answerStart ||
-      answerEnd > message.text.length
-    ) {
-      return;
-    }
-
-    const resolved = TokenPathPanelLogic.resolveHeatmapSpan(
-      message.attribution.heatmap,
-      answerStart,
-      answerEnd,
-      message.attribution.document,
-      message.text
-    );
-    if (!resolved) {
-      this.showToast("No source was found for that answer selection.");
-      return;
-    }
-    await this.onAttributionClick(
-      resolved.start,
-      resolved.end,
-      message.source,
-      message.attribution.document,
-      // Recomputed from the cached heatmap on every click, so a chat restored
-      // from a record saved before this existed behaves identically.
-      { contextStart: resolved.contextStart, contextEnd: resolved.contextEnd }
-    );
-  };
 
   onAttributionClick = async (
     start: number,
@@ -1518,7 +1466,7 @@ export class PanelController {
 
       // The suggestions block is peeled off before anything else sees the
       // answer: the displayed text, the conversation history, the cached
-      // record, and the heatmap request all get the answer without it.
+      // record, and the attribution request all get the answer without it.
       const parsed = TokenPathPanelLogic.parseSuggestions(result.answer);
       const answer = parsed.answer;
       if (!answer.trim()) {
@@ -1569,7 +1517,7 @@ export class PanelController {
           text: this.outputLimitNoteText(echoUser),
         });
       }
-      void this.loadHeatmap(assistant.id, contextVersion);
+      void this.loadAttributions(assistant.id, contextVersion);
     } catch (error) {
       if (
         turnController.signal.aborted ||
@@ -1594,7 +1542,7 @@ export class PanelController {
       if (partialAnswer.trim()) {
         // The stream delivered real text before it broke. Keep it, marked
         // incomplete, and report the failure alongside it. Attribution is
-        // deliberately skipped: a heatmap over a truncated answer would map
+        // deliberately skipped: attributing a truncated answer would map
         // text the model never finished.
         this.updateMessage(assistant.id, {
           answerStatus: "unavailable",
@@ -1840,7 +1788,7 @@ export class PanelController {
 
     // The attribution service caps `question` at 10,000 characters, while
     // boundedPrior is sized against the far larger generation budget — a chat
-    // with a few real turns would overflow the cap and 422 every heatmap
+    // with a few real turns would overflow the cap and 422 every attribution
     // request. Compose inside the cap by priority: the current request always
     // survives, then the generator instructions, then as much conversation
     // history as fits, newest turns first (restored to chronological order).
@@ -1926,7 +1874,7 @@ export class PanelController {
     return best;
   }
 
-  private async loadHeatmap(messageId: string, contextVersion: number) {
+  private async loadAttributions(messageId: string, contextVersion: number) {
     const message = this.snapshot.messages.find(
       (candidate) => candidate.id === messageId
     );
@@ -1934,18 +1882,17 @@ export class PanelController {
     if (!message || !attribution || !message.text) return;
 
     const controller = new AbortController();
-    this.heatmapControllers.set(messageId, controller);
+    this.attributionControllers.set(messageId, controller);
     try {
-      const heatmap = await TokenPath.heatmap({
+      const spans = await TokenPath.attributions({
         document: attribution.document,
         question: attribution.question,
         answer: message.text,
-        threshold: 0.1,
         signal: controller.signal,
       });
       if (
         controller.signal.aborted ||
-        this.heatmapControllers.get(messageId) !== controller ||
+        this.attributionControllers.get(messageId) !== controller ||
         contextVersion !== this.contextVersion
       ) {
         return;
@@ -1954,7 +1901,7 @@ export class PanelController {
         answerStatus: "ready",
         attribution: {
           ...attribution,
-          heatmap,
+          spans,
           status: "ready",
         },
       });
@@ -1976,7 +1923,7 @@ export class PanelController {
     } catch (error) {
       if (
         controller.signal.aborted ||
-        this.heatmapControllers.get(messageId) !== controller ||
+        this.attributionControllers.get(messageId) !== controller ||
         contextVersion !== this.contextVersion
       ) {
         return;
@@ -1991,10 +1938,10 @@ export class PanelController {
         },
       });
     } finally {
-      if (this.heatmapControllers.get(messageId) === controller) {
-        this.heatmapControllers.delete(messageId);
+      if (this.attributionControllers.get(messageId) === controller) {
+        this.attributionControllers.delete(messageId);
       }
-      // The heatmap is the second gate's input, so the chips are chosen here —
+      // Attribution is the second gate's input, so the chips are chosen here —
       // whether it arrived or failed. A failure falls back to the positional
       // spread rather than dropping the suggestions entirely.
       if (contextVersion === this.contextVersion) {
@@ -2019,10 +1966,8 @@ export class PanelController {
     if (!message) return;
     const attribution = message.attribution;
     const selected = TokenPathPanelLogic.selectSuggestions(candidates, {
-      heatmap:
-        attribution?.status === "ready" ? attribution.heatmap || null : null,
-      document: attribution?.document || this.context,
-      answer: message.text,
+      attributions:
+        attribution?.status === "ready" ? attribution.spans || null : null,
     });
     if (selected.length === 0) return;
     this.updateMessage(messageId, {
@@ -2059,7 +2004,7 @@ export class PanelController {
           documentIndex,
           question: attribution.question,
           status: attribution.status,
-          heatmap: attribution.heatmap,
+          spans: attribution.spans,
           error: attribution.error,
         };
       }
@@ -2133,14 +2078,18 @@ export class PanelController {
       })
     );
     const documents = Array.isArray(cached.documents) ? cached.documents : [];
-    let normalizedInterruptedAttribution = false;
+    let normalizedCachedAttribution = false;
     const messages: PanelMessage[] = cached.messages.map((message) => {
       const attributionWasInterrupted =
         message.kind === "answer" &&
         (message.answerStatus === "attributing" ||
           message.attribution?.status === "loading");
-      if (attributionWasInterrupted) normalizedInterruptedAttribution = true;
+      if (attributionWasInterrupted) normalizedCachedAttribution = true;
       const cachedAttribution = message.attribution;
+      const attributionUsesLegacyHeatmap =
+        cachedAttribution?.status === "ready" &&
+        !Array.isArray(cachedAttribution.spans);
+      if (attributionUsesLegacyHeatmap) normalizedCachedAttribution = true;
       // A record whose shared document is missing keeps its answer text; only
       // its source map is lost, exactly like an interrupted attribution.
       const document = cachedAttribution
@@ -2152,6 +2101,7 @@ export class PanelController {
         ...message,
         answerStatus:
           attributionWasInterrupted ||
+          attributionUsesLegacyHeatmap ||
           (cachedAttribution != null && !attributionIsUsable)
             ? ("unavailable" as const)
             : message.answerStatus,
@@ -2159,11 +2109,13 @@ export class PanelController {
           ? {
               document: document as string,
               question: cachedAttribution.question,
-              heatmap: cachedAttribution.heatmap,
-              ...(attributionWasInterrupted
+              spans: cachedAttribution.spans,
+              ...(attributionWasInterrupted || attributionUsesLegacyHeatmap
                 ? {
                     error:
-                      "Source mapping was interrupted when you left this page.",
+                      attributionUsesLegacyHeatmap
+                        ? "This saved answer uses the previous source-map format. Ask again to refresh its sources."
+                        : "Source mapping was interrupted when you left this page.",
                     status: "error" as const,
                   }
                 : {
@@ -2200,7 +2152,7 @@ export class PanelController {
       notice: null,
       sourceType: this.contextSourceType(),
     });
-    if (normalizedInterruptedAttribution) {
+    if (normalizedCachedAttribution) {
       void this.persistCurrentPageChat();
     }
     return true;
@@ -2389,7 +2341,7 @@ export class PanelController {
     this.activeTurnController = null;
     this.activeTurnCleanup = null;
     cleanupTurn?.();
-    for (const [messageId, controller] of this.heatmapControllers) {
+    for (const [messageId, controller] of this.attributionControllers) {
       controller.abort();
       const message = this.snapshot.messages.find(
         (candidate) => candidate.id === messageId
@@ -2405,7 +2357,7 @@ export class PanelController {
         });
       }
     }
-    this.heatmapControllers.clear();
+    this.attributionControllers.clear();
     if (this.snapshot.busy) {
       this.update({
         busy: false,

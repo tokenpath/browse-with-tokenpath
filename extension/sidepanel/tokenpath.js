@@ -339,21 +339,20 @@ const TokenPath = {
     }
   },
 
-  // POST /v1/attributions/heatmap — attribute an already-generated answer.
+  // POST /v1/attributions — attribute an already-generated answer.
   //
-  // TokenPath returns sparse COO arrays and token offset tables in Unicode
-  // code-point coordinates. Validate the matrix before it reaches UI code and
-  // adapt both offset tables to JavaScript's UTF-16 string coordinates.
+  // With no explicit spans or threshold, TokenPath selects the source-bearing
+  // answer phrases using its service defaults and returns browser-native UTF-16
+  // answer/source ranges. Validate the complete response before UI code sees it.
   /**
    * @param {{
    *   document?: string,
    *   question?: string,
    *   answer?: string,
-   *   threshold?: number,
    *   signal?: AbortSignal,
    * }} [options]
    */
-  async heatmap({ document, question, answer, threshold, signal } = {}) {
+  async attributions({ document, question, answer, signal } = {}) {
     if (
       typeof document !== "string" ||
       document.length === 0 ||
@@ -365,73 +364,18 @@ const TokenPath = {
       throw new TokenPathError(
         0,
         "invalid_request",
-        "TokenPath heatmap requires a non-empty document, question, and answer."
+        "TokenPath attribution requires a non-empty document, question, and answer."
       );
     }
 
     const payload = { document, question, answer };
-    if (threshold !== undefined) {
-      if (
-        typeof threshold !== "number" ||
-        !Number.isFinite(threshold) ||
-        threshold < 0 ||
-        threshold > 1
-      ) {
-        throw new TokenPathError(
-          0,
-          "invalid_request",
-          "TokenPath heatmap threshold must be a finite number from 0 to 1."
-        );
-      }
-      payload.threshold = threshold;
-    }
-
     const body = await this._request(
       "POST",
-      "/v1/attributions/heatmap",
+      "/v1/attributions",
       payload,
       signal
     );
-    const answerOffsetMap = TokenPathPanelLogic.codePointToUtf16Map(answer);
-    const sourceOffsetMap = TokenPathPanelLogic.codePointToUtf16Map(document);
-
-    const shape = normalizeHeatmapShape(body.shape);
-    const [answerTokenCount, documentTokenCount] = shape;
-    const row = normalizeHeatmapIndices(
-      body.row,
-      "row",
-      answerTokenCount
-    );
-    const col = normalizeHeatmapIndices(
-      body.col,
-      "col",
-      documentTokenCount
-    );
-    const data = normalizeHeatmapScores(body.data);
-    if (row.length !== col.length || row.length !== data.length) {
-      throw invalidHeatmapResponse(
-        "TokenPath heatmap row, col, and data arrays must have equal lengths."
-      );
-    }
-
-    return {
-      row,
-      col,
-      data,
-      shape,
-      answerOffsets: normalizeHeatmapOffsets(
-        body.answer_offsets,
-        "answer_offsets",
-        answerTokenCount,
-        answerOffsetMap
-      ),
-      documentOffsets: normalizeHeatmapOffsets(
-        body.document_offsets,
-        "document_offsets",
-        documentTokenCount,
-        sourceOffsetMap
-      ),
-    };
+    return normalizeAttributionResponse(body, document, answer);
   },
 
   async _request(method, path, payload, externalSignal) {
@@ -781,93 +725,104 @@ function subscriptionCount(value, field, fallback) {
   return value;
 }
 
-function invalidHeatmapResponse(message) {
+function invalidAttributionResponse(message) {
   return new TokenPathError(200, "invalid_response", message);
 }
 
-function normalizeHeatmapShape(value) {
+function splitsSurrogatePair(text, offset) {
+  return (
+    offset > 0 &&
+    offset < text.length &&
+    /[\uD800-\uDBFF]/.test(text[offset - 1]) &&
+    /[\uDC00-\uDFFF]/.test(text[offset])
+  );
+}
+
+function normalizeAttributionRange(value, field, text) {
   if (
-    !Array.isArray(value) ||
-    value.length !== 2 ||
-    !value.every((item) => Number.isInteger(item) && item > 0)
+    !value ||
+    typeof value !== "object" ||
+    !Number.isInteger(value.start) ||
+    !Number.isInteger(value.end) ||
+    value.start < 0 ||
+    value.end <= value.start ||
+    value.end > text.length ||
+    splitsSurrogatePair(text, value.start) ||
+    splitsSurrogatePair(text, value.end) ||
+    typeof value.text !== "string" ||
+    !value.text.trim() ||
+    value.text !== text.slice(value.start, value.end)
   ) {
-    throw invalidHeatmapResponse(
-      "TokenPath heatmap shape must contain two positive integers."
+    throw invalidAttributionResponse(
+      `TokenPath returned an invalid ${field} span.`
     );
   }
-  return [value[0], value[1]];
+  return { start: value.start, end: value.end, text: value.text };
 }
 
-function normalizeHeatmapIndices(value, field, upperBound) {
-  if (!Array.isArray(value)) {
-    throw invalidHeatmapResponse(
-      `TokenPath heatmap ${field} must be an array.`
+function normalizeAttributionResponse(body, document, answer) {
+  if (!body || typeof body !== "object" || !Array.isArray(body.spans)) {
+    throw invalidAttributionResponse(
+      "TokenPath attribution spans must be an array."
     );
   }
-  return value.map((item) => {
-    if (!Number.isInteger(item) || item < 0 || item >= upperBound) {
-      throw invalidHeatmapResponse(
-        `TokenPath heatmap ${field} contains an out-of-range token index.`
+  if (
+    body.offset_encoding !== undefined &&
+    body.offset_encoding !== "utf-16"
+  ) {
+    throw invalidAttributionResponse(
+      "TokenPath attribution offsets must use UTF-16."
+    );
+  }
+
+  const spans = [];
+  let previousAnswerEnd = -1;
+  for (const resolved of body.spans) {
+    if (!resolved || typeof resolved !== "object") {
+      throw invalidAttributionResponse(
+        "TokenPath returned an invalid resolved span."
       );
     }
-    return item;
-  });
-}
+    const answerSpan = normalizeAttributionRange(
+      resolved.answer,
+      "answer",
+      answer
+    );
+    if (answerSpan.start < previousAnswerEnd) {
+      throw invalidAttributionResponse(
+        "TokenPath attribution answer spans must be ordered and non-overlapping."
+      );
+    }
+    previousAnswerEnd = answerSpan.end;
 
-function normalizeHeatmapScores(value) {
-  if (!Array.isArray(value)) {
-    throw invalidHeatmapResponse("TokenPath heatmap data must be an array.");
-  }
-  return value.map((item) => {
+    // The API can return null for an explicitly requested range with no
+    // attribution signal. Automatic discovery normally omits these, but a
+    // null source is still valid and simply isn't clickable.
+    if (resolved.source == null) continue;
+    const sourceSpan = normalizeAttributionRange(
+      resolved.source,
+      "source",
+      document
+    );
     if (
-      typeof item !== "number" ||
-      !Number.isFinite(item) ||
-      item < 0 ||
-      item > 1
+      typeof resolved.source.confidence !== "number" ||
+      !Number.isFinite(resolved.source.confidence) ||
+      resolved.source.confidence < 0 ||
+      resolved.source.confidence > 1
     ) {
-      throw invalidHeatmapResponse(
-        "TokenPath heatmap data contains an invalid attribution score."
+      throw invalidAttributionResponse(
+        "TokenPath returned an invalid attribution confidence."
       );
     }
-    return item;
-  });
-}
-
-function normalizeHeatmapOffsets(value, field, expectedLength, utf16Map) {
-  if (!Array.isArray(value) || value.length !== expectedLength) {
-    throw invalidHeatmapResponse(
-      `TokenPath heatmap ${field} does not match its matrix dimension.`
-    );
+    spans.push({
+      answer: answerSpan,
+      source: {
+        ...sourceSpan,
+        confidence: resolved.source.confidence,
+      },
+    });
   }
-
-  const maxCodePointOffset = utf16Map.length - 1;
-  return value.map((range) => {
-    if (
-      !Array.isArray(range) ||
-      range.length !== 2 ||
-      !Number.isInteger(range[0]) ||
-      !Number.isInteger(range[1]) ||
-      range[0] < 0 ||
-      range[1] < range[0] ||
-      range[1] > maxCodePointOffset
-    ) {
-      throw invalidHeatmapResponse(
-        `TokenPath heatmap ${field} contains an invalid character range.`
-      );
-    }
-
-    const start = TokenPathPanelLogic.codePointOffsetToUtf16(
-      utf16Map,
-      range[0]
-    );
-    const end = TokenPathPanelLogic.codePointOffsetToUtf16(utf16Map, range[1]);
-    if (!Number.isInteger(start) || !Number.isInteger(end)) {
-      throw invalidHeatmapResponse(
-        `TokenPath heatmap ${field} could not be converted to UTF-16.`
-      );
-    }
-    return [start, end];
-  });
+  return spans;
 }
 
 function formatTokens(n) {

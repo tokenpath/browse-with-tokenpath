@@ -2,14 +2,14 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 
-export interface AnswerSelectionRange {
+export interface AnswerSpanRange {
   start: number;
   end: number;
 }
 
 export interface AnswerDomMapper {
   offsetAtPoint(clientX: number, clientY: number): number | null;
-  rangeForSpan(span: AnswerSelectionRange): Range | null;
+  rangeForSpan(span: AnswerSpanRange): Range | null;
 }
 
 type MarkdownNode = {
@@ -526,7 +526,7 @@ function caretBoundaryAtPoint(clientX: number, clientY: number) {
 
 function domRangeForSpan(
   mappings: TextNodeMapping[],
-  span: AnswerSelectionRange
+  span: AnswerSpanRange
 ) {
   let startBoundary: { node: Text; offset: number } | null = null;
   let endBoundary: { node: Text; offset: number } | null = null;
@@ -596,59 +596,4 @@ export function createAnswerDomMapper(
       return domRangeForSpan(mappings, span);
     },
   };
-}
-
-/**
- * Map a browser selection in rendered Markdown back to the exact raw answer.
- *
- * MDAST source positions exclude hidden link destinations, image alt text, and
- * formatting delimiters from the visible-text stream. Matching Streamdown's
- * text nodes against that stream therefore preserves the selected occurrence
- * even when the same words also exist in non-rendered Markdown syntax.
- */
-export function answerRangeFromSelection(
-  root: HTMLElement,
-  answer: string,
-  selection: Selection | null = window.getSelection()
-): AnswerSelectionRange | null {
-  if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) {
-    return null;
-  }
-
-  const range = selection.getRangeAt(0);
-  if (
-    !isDescendantOrSelf(root, range.startContainer) ||
-    !isDescendantOrSelf(root, range.endContainer)
-  ) {
-    return null;
-  }
-
-  const mappings = mapTextNodes(root, answer);
-  if (mappings.length === 0) return null;
-  const mappingByNode = new Map(
-    mappings.map((mapping) => [mapping.node, mapping])
-  );
-  const start = boundaryOffset(
-    range.startContainer,
-    range.startOffset,
-    "start",
-    mappingByNode
-  );
-  const end = boundaryOffset(
-    range.endContainer,
-    range.endOffset,
-    "end",
-    mappingByNode
-  );
-  if (
-    start == null ||
-    end == null ||
-    start < 0 ||
-    end <= start ||
-    end > answer.length ||
-    !answer.slice(start, end).trim()
-  ) {
-    return null;
-  }
-  return { start, end };
 }

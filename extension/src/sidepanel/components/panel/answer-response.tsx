@@ -16,7 +16,6 @@ import {
 } from "react";
 import { MessageResponse } from "@/components/ai-elements/message";
 import {
-  answerRangeFromSelection,
   createAnswerDomMapper,
   type AnswerDomMapper,
 } from "@/answer-selection";
@@ -35,12 +34,8 @@ function openInNewTab(href: string) {
 
 const ANSWER_COMPONENTS: AnswerComponents = {
   img: () => null,
-  // Markdown link text is rendered as a plain span with a click affordance,
-  // NOT as an anchor and NOT focusable: an anchor's native drag behaviour —
-  // and any focusable inline element, which Chromium refuses to start a
-  // text-selection drag inside — would break selecting the link text, and
-  // selecting answer text is how attribution is requested. The trailing icon
-  // is the real, keyboard-reachable anchor for opening and copying the link.
+  // Markdown link text gets a click affordance without nesting one anchor
+  // inside another. The trailing icon is the keyboard-reachable anchor.
   a: ({ children, className, href, node: _node, title }) => (
     <span className="answer-link">
       <span
@@ -72,27 +67,21 @@ const ANSWER_COMPONENTS: AnswerComponents = {
 };
 
 function samePhrase(
-  first: TokenPathAnswerAttributionPhrase | null,
-  second: TokenPathAnswerAttributionPhrase | null
+  first: TokenPathAttributionSpan | null,
+  second: TokenPathAttributionSpan | null
 ) {
-  return first?.start === second?.start && first?.end === second?.end;
+  return (
+    first?.answer.start === second?.answer.start &&
+    first?.answer.end === second?.answer.end
+  );
 }
 
-function phraseKey(phrase: TokenPathAnswerAttributionPhrase) {
-  return `${phrase.start}:${phrase.end}`;
+function phraseKey(phrase: TokenPathAttributionSpan) {
+  return `${phrase.answer.start}:${phrase.answer.end}`;
 }
 
-// Highlighting a PDF source costs a viewer reload, because Chrome applies a
-// text-fragment directive only while the document loads. Dragging or nudging a
-// selection fires this path once per adjustment, so a PDF source waits for the
-// range to settle; a page highlight is cheap and stays immediate.
-const PDF_SELECTION_SETTLE_MS = 400;
-
-function phraseLabel(answer: string, phrase: TokenPathAnswerAttributionPhrase) {
-  const text = answer
-    .slice(phrase.start, phrase.end)
-    .replace(/\s+/gu, " ")
-    .trim();
+function phraseLabel(phrase: TokenPathAttributionSpan) {
+  const text = phrase.answer.text.replace(/\s+/gu, " ").trim();
   return text.length > 68 ? `${text.slice(0, 67)}…` : text;
 }
 
@@ -114,7 +103,7 @@ export function AnswerResponse({
   const sourcesToggle = useRef<HTMLButtonElement>(null);
   const sourcesId = useId();
   const [hoveredPhrase, setHoveredPhrase] =
-    useState<TokenPathAnswerAttributionPhrase | null>(null);
+    useState<TokenPathAttributionSpan | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [activePhraseIndex, setActivePhraseIndex] = useState(0);
   const phrases = useMemo(() => {
@@ -122,15 +111,12 @@ export function AnswerResponse({
     if (
       message.answerStatus !== "ready" ||
       attribution?.status !== "ready" ||
-      !attribution.heatmap ||
+      !attribution.spans ||
       !message.text
     ) {
       return [];
     }
-    return TokenPathPanelLogic.buildAnswerAttributionPhrases(
-      attribution.heatmap,
-      message.text
-    );
+    return attribution.spans;
   }, [message.answerStatus, message.attribution, message.text]);
 
   useEffect(() => {
@@ -149,7 +135,7 @@ export function AnswerResponse({
     mapper.current = nextMapper;
     const ranges = new Map<string, Range>();
     for (const phrase of phrases) {
-      const range = nextMapper?.rangeForSpan(phrase);
+      const range = nextMapper?.rangeForSpan(phrase.answer);
       if (range) ranges.set(phraseKey(phrase), range);
     }
     phraseRanges.current = ranges;
@@ -170,53 +156,16 @@ export function AnswerResponse({
   }, [highlights, hoveredPhrase, message.id]);
 
   const revealPhrase = useCallback(
-    (phrase: TokenPathAnswerAttributionPhrase) => {
-      void controller.onAnswerSelection(message.id, phrase.start, phrase.end);
+    (phrase: TokenPathAttributionSpan) => {
+      if (!message.source || !message.attribution) return;
+      void controller.onAttributionClick(
+        phrase.source.start,
+        phrase.source.end,
+        message.source,
+        message.attribution.document
+      );
     },
-    [controller, message.id]
-  );
-  const locateSelection = useCallback(() => {
-    if (
-      !answerRoot.current ||
-      message.answerStatus === "streaming" ||
-      !message.text
-    ) {
-      return;
-    }
-    const range = answerRangeFromSelection(answerRoot.current, message.text);
-    if (!range) return;
-    void controller.onAnswerSelection(message.id, range.start, range.end);
-  }, [controller, message.answerStatus, message.id, message.text]);
-  const isPdfSource = message.source?.sourceType === "chrome-pdf";
-  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (settleTimer.current) clearTimeout(settleTimer.current);
-    },
-    []
-  );
-  // `defer` waits one frame so the browser has committed the selection the
-  // pointer just finished making. The trailing PDF timer subsumes that.
-  const requestLocateSelection = useCallback(
-    (defer: boolean) => {
-      if (settleTimer.current) {
-        clearTimeout(settleTimer.current);
-        settleTimer.current = null;
-      }
-      if (isPdfSource) {
-        settleTimer.current = setTimeout(() => {
-          settleTimer.current = null;
-          locateSelection();
-        }, PDF_SELECTION_SETTLE_MS);
-        return;
-      }
-      if (defer) {
-        requestAnimationFrame(locateSelection);
-        return;
-      }
-      locateSelection();
-    },
-    [isPdfSource, locateSelection]
+    [controller, message.attribution, message.source]
   );
   const phraseAtPoint = useCallback(
     (clientX: number, clientY: number) => {
@@ -224,14 +173,15 @@ export function AnswerResponse({
       if (offset == null) return null;
       return (
         phrases.find(
-          (phrase) => offset >= phrase.start && offset < phrase.end
+          (phrase) =>
+            offset >= phrase.answer.start && offset < phrase.answer.end
         ) || null
       );
     },
     [phrases]
   );
   const updateHoveredPhrase = useCallback(
-    (next: TokenPathAnswerAttributionPhrase | null) => {
+    (next: TokenPathAttributionSpan | null) => {
       setHoveredPhrase((current) =>
         samePhrase(current, next) ? current : next
       );
@@ -279,7 +229,6 @@ export function AnswerResponse({
           if (!phrase) return;
           revealPhrase(phrase);
         }}
-        onKeyUp={() => requestLocateSelection(false)}
         onPointerLeave={() => updateHoveredPhrase(null)}
         onPointerMove={(event) => {
           if (
@@ -292,10 +241,6 @@ export function AnswerResponse({
             return;
           }
           updateHoveredPhrase(phraseAtPoint(event.clientX, event.clientY));
-        }}
-        onPointerUp={(event) => {
-          if (event.button !== 0) return;
-          requestLocateSelection(true);
         }}
         ref={answerRoot}
       >
@@ -407,7 +352,7 @@ export function AnswerResponse({
                   {index + 1}
                 </span>
                 <span className="answer-source-text">
-                  {phraseLabel(message.text, phrase)}
+                  {phraseLabel(phrase)}
                 </span>
               </button>
             ))}

@@ -143,9 +143,9 @@ function recordDeterministic(good) {
   }
 }
 
-// Side-panel regression: TokenPath streams a Markdown answer, is called once
-// for the whole-answer heatmap, and resolves every later answer selection
-// locally from that cache before routing to the original page frame.
+// Side-panel regression: TokenPath streams a Markdown answer, returns selected
+// answer/source spans once, and every clickable phrase routes the server's
+// source range to the original page frame.
 {
   const page = await browser.newPage();
   try {
@@ -397,7 +397,7 @@ function recordDeterministic(good) {
               : selected.answer
           );
         }
-        if (path.endsWith("/v1/attributions/heatmap")) {
+        if (path.endsWith("/v1/attributions")) {
           const currentRequestMarker = "\n\nCurrent user request:\n";
           const currentRequestStart = request.question.lastIndexOf(
             currentRequestMarker
@@ -425,66 +425,30 @@ function recordDeterministic(good) {
                 ? request.answer.lastIndexOf(endText)
                 : request.answer.indexOf(endText, start);
             const end = endStart + endText.length;
-            return [
-              codePointOffset(request.answer, start),
-              codePointOffset(request.answer, end),
-            ];
+            return [start, end];
           });
           const sourceTerms = answerRanges.length === 2
             ? ["Fable 5", "worldwide"]
             : ["Fable 5"];
-          const documentRanges = sourceTerms.map((term) => {
-            const start = request.document.lastIndexOf(term);
-            // Return an intentionally narrow token range. The frontend's port
-            // of TokenPath's resolver must word-snap and verbatim-disambiguate.
-            return [
-              codePointOffset(request.document, start + 1),
-              codePointOffset(
-                request.document,
-                start + Math.max(2, term.length - 1)
-              ),
-            ];
-          });
-          const splitRange = ([start, end]) => {
-            if (end - start < 2) return [[start, end]];
-            const middle = start + Math.floor((end - start) / 2);
-            return [[start, middle], [middle, end]];
-          };
-          const answerTokenRanges = [];
-          const sparseRows = [];
-          const sparseColumns = [];
-          const sparseData = [];
-          const documentTokenRanges = [];
-          answerRanges.forEach((answerRange, termIndex) => {
-            const answerParts = splitRange(answerRange);
-            const documentParts = splitRange(documentRanges[termIndex]);
-            const documentBase = termIndex * 10;
-            while (
-              documentTokenRanges.length <
-              documentBase + documentParts.length
-            ) {
-              documentTokenRanges.push([0, 1]);
-            }
-            documentParts.forEach((part, partIndex) => {
-              documentTokenRanges[documentBase + partIndex] = part;
-            });
-            answerParts.forEach((part, partIndex) => {
-              sparseRows.push(answerTokenRanges.length);
-              sparseColumns.push(
-                documentBase +
-                  Math.min(partIndex, documentParts.length - 1)
-              );
-              sparseData.push(0.94 - termIndex * 0.06 - partIndex * 0.01);
-              answerTokenRanges.push(part);
-            });
-          });
           return responseJson({
-            row: sparseRows,
-            col: sparseColumns,
-            data: sparseData,
-            shape: [answerTokenRanges.length, documentTokenRanges.length],
-            answer_offsets: answerTokenRanges,
-            document_offsets: documentTokenRanges,
+            offset_encoding: "utf-16",
+            spans: answerRanges.map(([answerStart, answerEnd], index) => {
+              const term = sourceTerms[index];
+              const sourceStart = request.document.lastIndexOf(term);
+              return {
+                answer: {
+                  start: answerStart,
+                  end: answerEnd,
+                  text: request.answer.slice(answerStart, answerEnd),
+                },
+                source: {
+                  start: sourceStart,
+                  end: sourceStart + term.length,
+                  text: term,
+                  confidence: 0.94 - index * 0.06,
+                },
+              };
+            }),
           });
         }
         return responseJson({}, 404);
@@ -650,17 +614,15 @@ function recordDeterministic(good) {
         },
         { startText, endText }
       );
-      await page.waitForFunction(
-        (count) => window.__panelSent.length > count,
-        before
-      );
-      return page.evaluate(() => window.__panelSent.at(-1));
+      await page.waitForTimeout(50);
+      const after = await page.evaluate(() => window.__panelSent.length);
+      return { before, after };
     }
 
-    const firstHeatmapCount = await page.evaluate(
+    const firstAttributionCount = await page.evaluate(
       () =>
         window.__panelRequests.filter((item) =>
-          item.path.endsWith("/v1/attributions/heatmap")
+          item.path.endsWith("/v1/attributions")
         ).length
     );
     const clickTarget = page.locator(
@@ -713,8 +675,7 @@ function recordDeterministic(good) {
       });
       document.dispatchEvent(new Event("visibilitychange"));
     });
-    const firstSent = await selectAnswerText("Fable 5");
-    const secondSent = await selectAnswerText("worldwide");
+    const arbitrarySelection = await selectAnswerText("Fable 5");
     const realLinkBefore = await page.evaluate(
       () => window.__panelSent.length
     );
@@ -733,15 +694,12 @@ function recordDeterministic(good) {
       { steps: 8 }
     );
     await page.mouse.up();
-    await page.waitForFunction(
-      (count) => window.__panelSent.length > count,
-      realLinkBefore
-    );
-    const realLinkSent = await page.evaluate(() => window.__panelSent.at(-1));
-    const cachedHeatmapCount = await page.evaluate(
+    await page.waitForTimeout(50);
+    const realLinkAfter = await page.evaluate(() => window.__panelSent.length);
+    const cachedAttributionCount = await page.evaluate(
       () =>
         window.__panelRequests.filter((item) =>
-          item.path.endsWith("/v1/attributions/heatmap")
+          item.path.endsWith("/v1/attributions")
         ).length
     );
 
@@ -766,7 +724,7 @@ function recordDeterministic(good) {
         (expectedQuestion) =>
           window.__panelRequests.some(
             (item) =>
-              item.path.endsWith("/v1/attributions/heatmap") &&
+              item.path.endsWith("/v1/attributions") &&
               item.request?.question?.endsWith(
                 `\n\nCurrent user request:\n${expectedQuestion}`
               )
@@ -775,7 +733,22 @@ function recordDeterministic(good) {
             ?.dataset.answerStatus === "ready",
         question
       );
-      const sent = await selectAnswerText(startText, endText);
+      const beforeSourceClick = await page.evaluate(
+        () => window.__panelSent.length
+      );
+      await page.evaluate(() => {
+        const answer = [...document.querySelectorAll("[data-answer-status]")].at(-1);
+        const button = answer?.querySelector(".answer-source-phrase");
+        if (!(button instanceof HTMLButtonElement)) {
+          throw new Error("Attributed phrase was not listed");
+        }
+        button.click();
+      });
+      await page.waitForFunction(
+        (count) => window.__panelSent.length > count,
+        beforeSourceClick
+      );
+      const sent = await page.evaluate(() => window.__panelSent.at(-1));
       const rendered = await page.evaluate(
         (selector) =>
           !![...document.querySelectorAll(".is-assistant")]
@@ -824,7 +797,7 @@ function recordDeterministic(good) {
         item.path.endsWith("/v1/generate")
       );
       const heatmapRequests = window.__panelRequests.filter((item) =>
-        item.path.endsWith("/v1/attributions/heatmap")
+        item.path.endsWith("/v1/attributions")
       );
       return {
         autoHeatmapAnswer: heatmapRequests[0]?.request?.answer,
@@ -1071,11 +1044,9 @@ function recordDeterministic(good) {
       };
     });
 
-    const firstMessage = firstSent?.[1];
-    const firstOptions = firstSent?.[2];
-    const secondMessage = secondSent?.[1];
+    const firstMessage = clickedSent?.[1];
+    const firstOptions = clickedSent?.[2];
     const expectedFable = panelResult.context.lastIndexOf("Fable 5");
-    const expectedWorldwide = panelResult.context.lastIndexOf("worldwide");
     const generationBody = panelResult.generation?.request || {};
     const generationMessages = generationBody.messages || [];
     const systemPrompt = generationMessages.find(
@@ -1115,8 +1086,8 @@ function recordDeterministic(good) {
       sourceErrorState.hasToggle === false &&
       sourceErrorState.hasSummaryLengthControl === false &&
       !sourceErrorState.visible &&
-      firstHeatmapCount === 1 &&
-      cachedHeatmapCount === 1 &&
+      firstAttributionCount === 1 &&
+      cachedAttributionCount === 1 &&
       !panelResult.hasFixedSpans &&
       panelResult.hasClickGuide &&
       panelResult.hasMarkdownHeading &&
@@ -1249,22 +1220,19 @@ function recordDeterministic(good) {
       clickedSent?.[1]?.end === expectedFable + 7 &&
       panelHideClear?.[1]?.type === "clear-highlight" &&
       panelHideClear?.[1]?.captureId === undefined &&
-      panelResult.heatmapThreshold === 0.1 &&
+      panelResult.heatmapThreshold === undefined &&
       panelResult.clickGuide &&
       panelResult.clickablePhraseText.includes("Fable 5") &&
       panelResult.clickablePhraseText.includes("worldwide") &&
-      secondMessage?.start === expectedWorldwide &&
-      secondMessage?.end === expectedWorldwide + "worldwide".length &&
-      realLinkSent?.[1]?.start === expectedWorldwide &&
-      realLinkSent?.[1]?.end === expectedWorldwide + "worldwide".length &&
-      firstSent?.[0] === 42 &&
+      arbitrarySelection.before === arbitrarySelection.after &&
+      realLinkBefore === realLinkAfter &&
       firstOptions?.frameId === 9 &&
       boundaryCases.every((item) => item.good);
-    console.log("\n### Side-panel selection fixture");
+    console.log("\n### Side-panel attribution fixture");
     console.log(
-      `  [stream + one heatmap + arbitrary Markdown selections] ${good ? "PASS" : "FAIL"}` +
-        ` — waited=${capturedWithoutTurn}, calls=${firstHeatmapCount}/${cachedHeatmapCount}, frame=${firstOptions?.frameId}, ` +
-        `source=${firstMessage?.start}/${secondMessage?.start}, markdown=${panelResult.hasMarkdownHeading}/${panelResult.hasMarkdownStrong}, ` +
+      `  [stream + server-selected spans + phrase clicks] ${good ? "PASS" : "FAIL"}` +
+        ` — waited=${capturedWithoutTurn}, calls=${firstAttributionCount}/${cachedAttributionCount}, frame=${firstOptions?.frameId}, ` +
+        `source=${firstMessage?.start}, markdown=${panelResult.hasMarkdownHeading}/${panelResult.hasMarkdownStrong}, ` +
         `canonical=${panelResult.autoHeatmapAnswer === panelResult.canonicalSummary}/${panelResult.followupHistoryAnswer === panelResult.canonicalSummary}, ` +
         `lengthControl=${panelResult.hasSummaryLengthControl}/${savedSummaryLength}, output=${generationBody.max_output_tokens}/${opaqueOriginGeneration.maxOutputTokens}, ` +
         `sourceCard=${collapsedSourceState.cardHeight.toFixed(0)}px/${expandedSourceState.contextVisible}/${replacementSourceCollapsed}/${sourceErrorState.visible}, ` +
@@ -1277,7 +1245,7 @@ function recordDeterministic(good) {
     recordDeterministic(good);
   } catch (error) {
     console.log(
-      `\n### Side-panel selection fixture\n  FAIL — ${String(error.message).split("\n")[0]}`
+      `\n### Side-panel attribution fixture\n  FAIL — ${String(error.message).split("\n")[0]}`
     );
     const at = String(error.stack)
       .split("\n")
@@ -1446,26 +1414,15 @@ function recordDeterministic(good) {
         }
         window.__pdfRequests.push({ path, request });
         if (path.endsWith("/v1/generate")) return doneStream();
-        if (path.endsWith("/v1/attributions/heatmap")) {
+        if (path.endsWith("/v1/attributions")) {
           const answerStart = answer.indexOf(target);
           const documentStart = source.indexOf(target);
           return responseJson({
-            row: [0],
-            col: [0],
-            data: [0.97],
-            shape: [1, 1],
-            answer_offsets: [
-              [
-                codePointOffset(answer, answerStart),
-                codePointOffset(answer, answerStart + target.length),
-              ],
-            ],
-            document_offsets: [
-              [
-                codePointOffset(source, documentStart),
-                codePointOffset(source, documentStart + target.length),
-              ],
-            ],
+            offset_encoding: "utf-16",
+            spans: [{
+              answer: { start: answerStart, end: answerStart + target.length, text: target },
+              source: { start: documentStart, end: documentStart + target.length, text: target, confidence: 0.97 },
+            }],
           });
         }
         return responseJson({}, 404);
@@ -1491,7 +1448,7 @@ function recordDeterministic(good) {
           item.path.endsWith("/v1/generate")
         ) &&
         window.__pdfRequests.some((item) =>
-          item.path.endsWith("/v1/attributions/heatmap")
+          item.path.endsWith("/v1/attributions")
         )
     );
 
@@ -1504,7 +1461,7 @@ function recordDeterministic(good) {
         ).length
     );
 
-    const selectPdfAnswer = async () => {
+    const clickPdfAttribution = async () => {
       const priorHighlights = await page.evaluate(
         () =>
           window.__pdfRuntimeMessages.filter(
@@ -1512,27 +1469,11 @@ function recordDeterministic(good) {
           ).length
       );
       await page.evaluate(() => {
-        const root = document.querySelector("[data-answer-content]");
-        const walker = document.createTreeWalker(
-          root,
-          NodeFilter.SHOW_TEXT
-        );
-        let node;
-        while ((node = walker.nextNode())) {
-          const start = node.data.indexOf(window.__pdfTarget);
-          if (start === -1) continue;
-          const range = document.createRange();
-          range.setStart(node, start);
-          range.setEnd(node, start + window.__pdfTarget.length);
-          const selection = window.getSelection();
-          selection.removeAllRanges();
-          selection.addRange(range);
-          root.dispatchEvent(
-            new PointerEvent("pointerup", { bubbles: true, button: 0 })
-          );
-          return;
+        const button = document.querySelector(".answer-source-phrase");
+        if (!(button instanceof HTMLButtonElement)) {
+          throw new Error("Could not find the PDF answer attribution");
         }
-        throw new Error("Could not select the PDF answer text");
+        button.click();
       });
       await page.waitForFunction(
         (count) =>
@@ -1543,7 +1484,7 @@ function recordDeterministic(good) {
       );
     };
 
-    await selectPdfAnswer();
+    await clickPdfAttribution();
     const firstHighlight = await page.evaluate(
       () =>
         window.__pdfRuntimeMessages.find(
@@ -1561,9 +1502,8 @@ function recordDeterministic(good) {
       .then(() => true)
       .catch(() => false);
 
-    // Nudging a selection fires pointerup repeatedly. Each one used to cost a
-    // reload; a trailing settle window collapses them into the range the user
-    // stopped on.
+    // Selecting answer text is now an ordinary copy interaction and must not
+    // trigger another PDF reload/highlight.
     const beforeNudges = await page.evaluate(
       () =>
         window.__pdfRuntimeMessages.filter(
@@ -1578,7 +1518,7 @@ function recordDeterministic(good) {
         );
       }
     });
-    await page.waitForTimeout(900);
+    await page.waitForTimeout(50);
     const nudgeHighlights = await page.evaluate(
       (count) =>
         window.__pdfRuntimeMessages.filter(
@@ -1654,7 +1594,7 @@ function recordDeterministic(good) {
     await page.evaluate(() => {
       window.__delayNextPdfHighlight = true;
     });
-    await selectPdfAnswer();
+    await clickPdfAttribution();
     const pendingClearCountBefore = await page.evaluate(
       () =>
         window.__pdfRuntimeMessages.filter(
@@ -1679,7 +1619,7 @@ function recordDeterministic(good) {
     // before the panel document disappears — but only to clean the URL. The
     // clear carries no reload request, so the PDF the user is reading stays
     // exactly where it is and keeps its highlight until its next load.
-    await selectPdfAnswer();
+    await clickPdfAttribution();
     const closeClearCountBefore = await page.evaluate(
       () =>
         window.__pdfRuntimeMessages.filter(
@@ -1707,7 +1647,7 @@ function recordDeterministic(good) {
 
     // Leave another PDF highlight active so navigation proves invalidation
     // deliberately does not send a clear that would restore the old PDF URL.
-    await selectPdfAnswer();
+    await clickPdfAttribution();
     const clearCountAtNavigation = await page.evaluate(
       () =>
         window.__pdfRuntimeMessages.filter(
@@ -1742,7 +1682,7 @@ function recordDeterministic(good) {
         item.path.endsWith("/v1/generate")
       ).length,
       heatmapCalls: window.__pdfRequests.filter((item) =>
-        item.path.endsWith("/v1/attributions/heatmap")
+        item.path.endsWith("/v1/attributions")
       ).length,
       contextText:
         document.getElementById("context-text")?.textContent || "",
@@ -1774,7 +1714,7 @@ function recordDeterministic(good) {
       result.tabMessageCount === 0 &&
       samePdfStayedValid &&
       reloadNoticeShown &&
-      nudgeHighlights === 1 &&
+      nudgeHighlights === 0 &&
       clearsWhileHidden === 0 &&
       clearMessage?.type === "clear-pdf-source-highlight" &&
       clearMessage?.tabId === 91 &&
@@ -1851,7 +1791,7 @@ function recordDeterministic(good) {
         document.querySelector('[data-answer-status="ready"]')
       );
     }
-    await selectPdfAnswer();
+    await clickPdfAttribution();
     const switchCounts = await page.evaluate(() => ({
       clears: window.__pdfRuntimeMessages.filter(
         (message) => message.type === "clear-pdf-source-highlight"
@@ -2113,26 +2053,15 @@ function recordDeterministic(good) {
         }
         window.__fullPdfRequests.push({ path, request });
         if (path.endsWith("/v1/generate")) return doneStream();
-        if (path.endsWith("/v1/attributions/heatmap")) {
+        if (path.endsWith("/v1/attributions")) {
           const answerStart = answer.indexOf(target);
           const documentStart = newerText.indexOf(target);
           return responseJson({
-            row: [0],
-            col: [0],
-            data: [0.98],
-            shape: [1, 1],
-            answer_offsets: [
-              [
-                codePointOffset(answer, answerStart),
-                codePointOffset(answer, answerStart + target.length),
-              ],
-            ],
-            document_offsets: [
-              [
-                codePointOffset(newerText, documentStart),
-                codePointOffset(newerText, documentStart + target.length),
-              ],
-            ],
+            offset_encoding: "utf-16",
+            spans: [{
+              answer: { start: answerStart, end: answerStart + target.length, text: target },
+              source: { start: documentStart, end: documentStart + target.length, text: target, confidence: 0.98 },
+            }],
           });
         }
         return responseJson({}, 404);
@@ -2202,7 +2131,7 @@ function recordDeterministic(good) {
           item.path.endsWith("/v1/generate")
         ) &&
         window.__fullPdfRequests.some((item) =>
-          item.path.endsWith("/v1/attributions/heatmap")
+          item.path.endsWith("/v1/attributions")
         )
     );
 
@@ -2221,7 +2150,7 @@ function recordDeterministic(good) {
         item.path.endsWith("/v1/generate")
       );
       const heatmapRequests = window.__fullPdfRequests.filter((item) =>
-        item.path.endsWith("/v1/attributions/heatmap")
+        item.path.endsWith("/v1/attributions")
       );
       const generationMessages =
         generationRequests[0]?.request?.messages || [];
@@ -2286,7 +2215,7 @@ function recordDeterministic(good) {
           item.path.endsWith("/v1/generate")
         ).length === 2 &&
         window.__fullPdfRequests.filter((item) =>
-          item.path.endsWith("/v1/attributions/heatmap")
+          item.path.endsWith("/v1/attributions")
         ).length === 2
     );
     const toolbarPdfResult = await page.evaluate(() => {
@@ -2511,33 +2440,16 @@ function recordDeterministic(good) {
               : askAnswer
           );
         }
-        if (path.endsWith("/v1/attributions/heatmap")) {
+        if (path.endsWith("/v1/attributions")) {
           const target = "workflow";
           const answerStart = request.answer.indexOf(target);
           const documentStart = request.document.indexOf(target);
           return responseJson({
-            row: [0],
-            col: [0],
-            data: [0.96],
-            shape: [1, 1],
-            answer_offsets: [
-              [
-                codePointOffset(request.answer, answerStart),
-                codePointOffset(
-                  request.answer,
-                  answerStart + target.length
-                ),
-              ],
-            ],
-            document_offsets: [
-              [
-                codePointOffset(request.document, documentStart),
-                codePointOffset(
-                  request.document,
-                  documentStart + target.length
-                ),
-              ],
-            ],
+            offset_encoding: "utf-16",
+            spans: [{
+              answer: { start: answerStart, end: answerStart + target.length, text: target },
+              source: { start: documentStart, end: documentStart + target.length, text: target, confidence: 0.96 },
+            }],
           });
         }
         return responseJson({}, 404);
@@ -2578,7 +2490,7 @@ function recordDeterministic(good) {
           item.path.endsWith("/v1/generate")
         ).length === 1 &&
         window.__intentRequests.filter((item) =>
-          item.path.endsWith("/v1/attributions/heatmap")
+          item.path.endsWith("/v1/attributions")
         ).length === 1
     );
     const toolbarSummary = await page.evaluate(() => {
@@ -2629,7 +2541,7 @@ function recordDeterministic(good) {
           item.path.endsWith("/v1/generate")
         ).length === 1 &&
         window.__intentRequests.filter((item) =>
-          item.path.endsWith("/v1/attributions/heatmap")
+          item.path.endsWith("/v1/attributions")
         ).length === 1
     );
     const toolbarSecondClick = await page.evaluate(() => {
@@ -2641,7 +2553,7 @@ function recordDeterministic(good) {
           item.path.endsWith("/v1/generate")
         ).length,
         heatmapCount: window.__intentRequests.filter((item) =>
-          item.path.endsWith("/v1/attributions/heatmap")
+          item.path.endsWith("/v1/attributions")
         ).length,
       };
       window.__intentRequests.length = 0;
@@ -2800,7 +2712,7 @@ function recordDeterministic(good) {
           item.path.endsWith("/v1/generate")
         ).length === 1 &&
         window.__intentRequests.filter((item) =>
-          item.path.endsWith("/v1/attributions/heatmap")
+          item.path.endsWith("/v1/attributions")
         ).length === 1
     );
     const summaryResult = await page.evaluate(() => {
@@ -2808,7 +2720,7 @@ function recordDeterministic(good) {
         item.path.endsWith("/v1/generate")
       );
       const heatmap = window.__intentRequests.find((item) =>
-        item.path.endsWith("/v1/attributions/heatmap")
+        item.path.endsWith("/v1/attributions")
       );
       const messages = generation?.request?.messages || [];
       return {
@@ -2901,7 +2813,7 @@ function recordDeterministic(good) {
         item.path.endsWith("/v1/generate")
       ).length,
       heatmapCount: window.__intentRequests.filter((item) =>
-        item.path.endsWith("/v1/attributions/heatmap")
+        item.path.endsWith("/v1/attributions")
       ).length,
       inputDisabled: document.getElementById("input")?.disabled,
       label: document.querySelector(".source-label")?.textContent || "",
@@ -2927,7 +2839,7 @@ function recordDeterministic(good) {
           item.path.endsWith("/v1/generate")
         ).length === 2 &&
         window.__intentRequests.filter((item) =>
-          item.path.endsWith("/v1/attributions/heatmap")
+          item.path.endsWith("/v1/attributions")
         ).length === 2
     );
     const askResult = await page.evaluate(() => {
@@ -2935,7 +2847,7 @@ function recordDeterministic(good) {
         item.path.endsWith("/v1/generate")
       );
       const heatmaps = window.__intentRequests.filter((item) =>
-        item.path.endsWith("/v1/attributions/heatmap")
+        item.path.endsWith("/v1/attributions")
       );
       const generation = generations[1];
       const messages = generation?.request?.messages || [];
@@ -3151,7 +3063,7 @@ function recordDeterministic(good) {
     await page.waitForFunction(
       () =>
         window.__intentRequests.filter((item) =>
-          item.path.endsWith("/v1/attributions/heatmap")
+          item.path.endsWith("/v1/attributions")
         ).length === 3
     );
     await page.waitForTimeout(40);
@@ -3585,7 +3497,7 @@ function recordDeterministic(good) {
   }
 }
 
-// Same-auth balance responses are sequenced, and rapid answer selections carry
+// Same-auth balance responses are sequenced, and rapid attribution clicks carry
 // highlight ownership IDs so a late A response cannot clear newer highlight B.
 {
   const page = await browser.newPage();
@@ -3693,7 +3605,7 @@ function recordDeterministic(good) {
         },
       };
 
-      window.fetch = async (url) => {
+      window.fetch = async (url, options = {}) => {
         const path = String(url);
         if (path.endsWith("/v1/me/credits")) {
           window.__creditRequestCount++;
@@ -3706,20 +3618,20 @@ function recordDeterministic(good) {
           return responseJson({ available_tokens: 800 });
         }
         if (path.endsWith("/v1/generate")) return doneStream();
-        if (path.endsWith("/v1/attributions/heatmap")) {
+        if (path.endsWith("/v1/attributions")) {
+          const request = JSON.parse(options.body);
           const betaDocumentStart = source.indexOf("beta");
           return responseJson({
-            row: [0, 1],
-            col: [0, 1],
-            data: [0.9, 0.8],
-            shape: [2, 2],
-            answer_offsets: [
-              [0, 5],
-              [10, 14],
-            ],
-            document_offsets: [
-              [0, 5],
-              [betaDocumentStart, betaDocumentStart + 4],
+            offset_encoding: "utf-16",
+            spans: [
+              {
+                answer: { start: 0, end: 5, text: request.answer.slice(0, 5) },
+                source: { start: 0, end: 5, text: source.slice(0, 5), confidence: 0.9 },
+              },
+              {
+                answer: { start: 10, end: 14, text: request.answer.slice(10, 14) },
+                source: { start: betaDocumentStart, end: betaDocumentStart + 4, text: "beta", confidence: 0.8 },
+              },
             ],
           });
         }
@@ -3741,41 +3653,25 @@ function recordDeterministic(good) {
         document.getElementById("credits")?.textContent === "800 tokens"
     );
 
-    const selectText = async (text) => {
+    const clickPhrase = async (index) => {
       const prior = await page.evaluate(
         () => window.__pendingHighlightResponses.length
       );
-      await page.evaluate((selectedText) => {
-        const root = document.querySelector("[data-answer-content]");
-        const walker = document.createTreeWalker(
-          root,
-          NodeFilter.SHOW_TEXT
-        );
-        let node;
-        while ((node = walker.nextNode())) {
-          const start = node.data.indexOf(selectedText);
-          if (start === -1) continue;
-          const range = document.createRange();
-          range.setStart(node, start);
-          range.setEnd(node, start + selectedText.length);
-          const selection = window.getSelection();
-          selection.removeAllRanges();
-          selection.addRange(range);
-          root.dispatchEvent(
-            new PointerEvent("pointerup", { bubbles: true, button: 0 })
-          );
-          return;
+      await page.evaluate((phraseIndex) => {
+        const button = document.querySelectorAll(".answer-source-phrase")[phraseIndex];
+        if (!(button instanceof HTMLButtonElement)) {
+          throw new Error(`Could not find phrase ${phraseIndex}`);
         }
-        throw new Error(`Could not select ${selectedText}`);
-      }, text);
+        button.click();
+      }, index);
       await page.waitForFunction(
         (count) => window.__pendingHighlightResponses.length > count,
         prior
       );
     };
 
-    await selectText("Alpha");
-    await selectText("beta");
+    await clickPhrase(0);
+    await clickPhrase(1);
     await page.evaluate(() => {
       window.__pendingHighlightResponses[1].resolve({ ok: true });
     });
@@ -6956,70 +6852,24 @@ if (deterministicFail > 0) process.exitCode = 1;
                 }
               );
             }
-            if (path.endsWith("/v1/attributions/heatmap")) {
-              // Two aligned tokens over the cited phrase — the smallest shape
-              // the panel derives an attributed phrase from — plus a third,
-              // weaker cell on an earlier passage. That cell is far enough
-              // away that the citation refuses to reach it, but near enough
-              // that the supported-neighbourhood pass does: it is where the
-              // topic starts being discussed.
-              const half = Math.floor(attributed.length / 2);
+            if (path.endsWith("/v1/attributions")) {
               const answerStart = request.answer.indexOf(attributed);
               const documentStart = request.document.indexOf(attributed);
-              const passageStart = request.document.indexOf(passageAnchor);
-              const token = (text, from, to) => [
-                codePointOffset(text, from),
-                codePointOffset(text, to),
-              ];
-              // Document tokens in document order: the supporting passage's
-              // opening words, eight unsupported filler tokens spanning the
-              // gap, then the two halves of the cited phrase.
-              const documentTokens = [
-                token(
-                  request.document,
-                  passageStart,
-                  passageStart + passageAnchor.length
-                ),
-              ];
-              const gapStart = passageStart + passageAnchor.length;
-              const fillerCount = 8;
-              const fillerWidth = Math.max(
-                1,
-                Math.floor((documentStart - gapStart) / fillerCount)
-              );
-              for (let index = 0; index < fillerCount; index++) {
-                const from = gapStart + index * fillerWidth;
-                documentTokens.push(
-                  token(
-                    request.document,
-                    from,
-                    Math.min(documentStart, from + fillerWidth)
-                  )
-                );
-              }
-              documentTokens.push(
-                token(request.document, documentStart, documentStart + half),
-                token(
-                  request.document,
-                  documentStart + half,
-                  documentStart + attributed.length
-                )
-              );
-              const citedColumn = documentTokens.length - 2;
               return responseJson({
-                row: [0, 1, 0],
-                col: [citedColumn, citedColumn + 1, 0],
-                data: [0.97, 0.93, 0.5],
-                shape: [2, documentTokens.length],
-                answer_offsets: [
-                  token(request.answer, answerStart, answerStart + half),
-                  token(
-                    request.answer,
-                    answerStart + half,
-                    answerStart + attributed.length
-                  ),
-                ],
-                document_offsets: documentTokens,
+                offset_encoding: "utf-16",
+                spans: [{
+                  answer: {
+                    start: answerStart,
+                    end: answerStart + attributed.length,
+                    text: attributed,
+                  },
+                  source: {
+                    start: documentStart,
+                    end: documentStart + attributed.length,
+                    text: attributed,
+                    confidence: 0.97,
+                  },
+                }],
               });
             }
             return responseJson({}, 404);
@@ -7082,7 +6932,7 @@ if (deterministicFail > 0) process.exitCode = 1;
             item.path.endsWith("/v1/generate")
           ).length === 1 &&
           window.__videoRequests.filter((item) =>
-            item.path.endsWith("/v1/attributions/heatmap")
+            item.path.endsWith("/v1/attributions")
           ).length === 1
       );
       const summarised = await panel.evaluate(() => {
@@ -7090,7 +6940,7 @@ if (deterministicFail > 0) process.exitCode = 1;
           item.path.endsWith("/v1/generate")
         );
         const heatmap = window.__videoRequests.find((item) =>
-          item.path.endsWith("/v1/attributions/heatmap")
+          item.path.endsWith("/v1/attributions")
         );
         return {
           answer:
@@ -7146,23 +6996,22 @@ if (deterministicFail > 0) process.exitCode = 1;
         highlightMessage
       );
 
-      // The citation stays the exact phrase; the supported passage travels
-      // beside it and reaches back to where the topic starts being discussed.
+      // The resolved-span endpoint returns the exact source phrase directly;
+      // there is no client-derived wider heatmap neighbourhood.
       videoCheck(
-        "the panel derives the supported passage from the cached heatmap",
-        highlightMessage?.contextStart === TRANSCRIPT.indexOf(PASSAGE_ANCHOR) &&
-          highlightMessage.contextStart < highlightMessage.start &&
-          highlightMessage.contextEnd >= highlightMessage.end,
+        "the panel uses the server-returned source span directly",
+        highlightMessage?.contextStart === undefined &&
+          highlightMessage?.contextEnd === undefined,
         highlightMessage
       );
 
       // The panel's own message, unmodified, into the real content script.
       const seeked = await send(contentFixture.page, highlightMessage);
       videoCheck(
-        "that message starts playback at the beginning of the discussion",
+        "that message starts playback at the cited cue",
         seeked.resp?.ok === true &&
-          near(seeked.currentTime, 10) &&
-          seeked.indicator === "TokenPath source · 0:42 · from 0:10",
+          near(seeked.currentTime, 40) &&
+          seeked.indicator === "TokenPath source · 0:42",
         seeked
       );
 
@@ -7173,7 +7022,7 @@ if (deterministicFail > 0) process.exitCode = 1;
       const heatmapsBeforeLimit = await panel.evaluate(
         () =>
           window.__videoRequests.filter((item) =>
-            item.path.endsWith("/v1/attributions/heatmap")
+            item.path.endsWith("/v1/attributions")
           ).length
       );
       await panel.evaluate(() => {
@@ -7191,7 +7040,7 @@ if (deterministicFail > 0) process.exitCode = 1;
           document.querySelectorAll('[data-answer-status="ready"]').length ===
             2 &&
           window.__videoRequests.filter((item) =>
-            item.path.endsWith("/v1/attributions/heatmap")
+            item.path.endsWith("/v1/attributions")
           ).length ===
             before + 1,
         heatmapsBeforeLimit
@@ -7654,29 +7503,24 @@ if (deterministicFail > 0) process.exitCode = 1;
             }
             return doneStream(answers.follow);
           }
-          if (path.endsWith("/v1/attributions/heatmap")) {
-            // Two tokens over the head of the answer and the head of the
-            // document: whatever the answer said, the passage it drew on is
-            // the source's opening sentences.
-            const answerSplit = Math.min(24, request.answer.length);
+          if (path.endsWith("/v1/attributions")) {
             const answerEnd = Math.min(48, request.answer.length);
-            const documentSplit = Math.min(30, request.document.length);
             const documentEnd = Math.min(60, request.document.length);
-            const cpA = (offset) => codePointOffset(request.answer, offset);
-            const cpD = (offset) => codePointOffset(request.document, offset);
             return responseJson({
-              row: [0, 1],
-              col: [0, 1],
-              data: [0.95, 0.9],
-              shape: [2, 2],
-              answer_offsets: [
-                [0, cpA(answerSplit)],
-                [cpA(answerSplit), cpA(answerEnd)],
-              ],
-              document_offsets: [
-                [0, cpD(documentSplit)],
-                [cpD(documentSplit), cpD(documentEnd)],
-              ],
+              offset_encoding: "utf-16",
+              spans: [{
+                answer: {
+                  start: 0,
+                  end: answerEnd,
+                  text: request.answer.slice(0, answerEnd),
+                },
+                source: {
+                  start: 0,
+                  end: documentEnd,
+                  text: request.document.slice(0, documentEnd),
+                  confidence: 0.95,
+                },
+              }],
             });
           }
           return responseJson({}, 404);
@@ -7753,7 +7597,7 @@ if (deterministicFail > 0) process.exitCode = 1;
       requestsAfterSummary[0]?.messages?.at(-1)?.content || "";
     const heatmapAnswers = await page.evaluate(() =>
       window.__followUpRequests
-        .filter((item) => item.path.endsWith("/v1/attributions/heatmap"))
+        .filter((item) => item.path.endsWith("/v1/attributions"))
         .map((item) => item.request.answer)
     );
     const renderedAnswer = await page.evaluate(
