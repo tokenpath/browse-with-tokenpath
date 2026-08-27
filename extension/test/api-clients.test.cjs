@@ -606,7 +606,10 @@ test("TokenPath validates and returns server-selected UTF-16 spans", async () =>
   const result = await client.attributions(attributionInput);
 
   assert.equal(request.url, "http://localhost:8000/v1/attributions");
-  assert.deepEqual(request.body, attributionInput);
+  assert.deepEqual(request.body, {
+    ...attributionInput,
+    offset_encoding: "utf-16",
+  });
   assert.ok(!("threshold" in request.body));
   assert.ok(!("spans" in request.body));
   assert.deepEqual(plain(result), validAttributions.spans);

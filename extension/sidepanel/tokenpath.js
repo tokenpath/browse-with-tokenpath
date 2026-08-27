@@ -368,7 +368,15 @@ const TokenPath = {
       );
     }
 
-    const payload = { document, question, answer };
+    // Browser string offsets are UTF-16 code units. Ask for that index space
+    // explicitly instead of relying on the server default, which may differ on
+    // older or self-hosted TokenPath deployments.
+    const payload = {
+      document,
+      question,
+      answer,
+      offset_encoding: "utf-16",
+    };
     const body = await this._request(
       "POST",
       "/v1/attributions",

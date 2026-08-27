@@ -482,13 +482,15 @@ Once generation finishes, the panel sends one
 {
   document: "the canonical extracted source",
   question: "the latest user turn",
-  answer: "the exact final displayed answer"
+  answer: "the exact final displayed answer",
+  offset_encoding: "utf-16"
 }
 ```
 
 The request deliberately omits `spans` and `threshold`, so the service selects
-source-bearing answer phrases using its defaults. The response contains UTF-16
-answer/source spans:
+source-bearing answer phrases using its defaults. It explicitly requests UTF-16
+because browser string indexes use UTF-16 code units. The response contains
+UTF-16 answer/source spans:
 
 ```js
 {

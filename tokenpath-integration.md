@@ -236,13 +236,15 @@ POST /v1/attributions
 {
   "document": "the exact canonical extracted source",
   "question": "the latest user turn",
-  "answer": "the exact final displayed answer"
+  "answer": "the exact final displayed answer",
+  "offset_encoding": "utf-16"
 }
 ```
 
 The client deliberately sends neither `spans` nor `threshold`: TokenPath uses
-its defaults to discover source-bearing answer phrases. The expected response
-contains half-open UTF-16 ranges against the exact submitted strings:
+its defaults to discover source-bearing answer phrases. It does request UTF-16
+offsets explicitly because browser string indexes use UTF-16 code units. The
+expected response contains half-open ranges against the exact submitted strings:
 
 ```json
 {
