@@ -5,8 +5,8 @@ chat about a web page, a passage inside it, Chrome's native PDF viewer, or a
 captioned YouTube video. Click the toolbar icon for a one-click summary of the
 whole page — or, on a YouTube watch page, of the video's subtitle transcript —
 or select a passage, right-click, and choose the single **Chat with TokenPath**
-context-menu item. Every answer can be traced back: click an underlined phrase,
-select any part of the answer, or open its **Sources** list, and the extension
+context-menu item. Every answer can be traced back: click an underlined phrase
+or open its **Sources** list, and the extension
 highlights and scrolls to the source text that most strongly supports it, or
 seeks the video to the moment it was said.
 
@@ -189,16 +189,14 @@ chatted with reopens its saved chat instead — nothing is re-summarized.
 5. The panel uses Vercel [AI Elements](https://elements.ai-sdk.dev/)
    conversation, message, and prompt-input primitives; answers render as safe
    Markdown through Streamdown while tokens arrive. After generation, one
-   authenticated `POST /v1/attributions/heatmap` request maps the complete
-   answer to the captured document. TokenPath's sparse matrix and code-point
-   offset tables are validated, converted once to UTF-16, and cached with that
-   answer.
-6. Clicking an underlined phrase, choosing one from the **Sources** list, or
-   selecting any rendered answer text—across Markdown blocks, emphasis, links,
-   inline or fenced code, entities, and Unicode—maps back to the exact
-   raw-answer character range. A local port of TokenPath's span resolver
-   aggregates the cached heatmap just in time and derives one supported source
-   range; changing the selection makes no additional API call.
+   authenticated `POST /v1/attributions` request maps the complete answer to
+   the captured document. The request omits `spans` and `threshold`, so
+   TokenPath selects attributed phrases with its service defaults. Returned
+   UTF-16 answer/source spans are validated and cached with that answer.
+6. Clicking an underlined phrase or choosing one from the **Sources** list
+   uses its returned source span directly. The rendered-Markdown mapper places
+   each returned answer span accurately across blocks, emphasis, links, code,
+   entities, and Unicode; ordinary text selection remains available for copy.
 7. The content script maps those document offsets back to live DOM `Range`s,
    highlights the source with the CSS Custom Highlight API, and scrolls it into
    view, including through nested panes such as Gmail's message view. The
@@ -340,7 +338,7 @@ extension/
 │   ├── controller.ts          # capture/auth/chat/highlight state machine
 │   ├── chat-cache.ts          # IndexedDB page-chat store, keys, change check
 │   ├── pdf-text-extractor.ts  # hidden native-PDF full-text capture
-│   ├── answer-selection.ts    # rendered Markdown → raw-answer offsets
+│   ├── answer-selection.ts    # raw-answer spans → rendered Markdown ranges
 │   ├── hooks/use-answer-highlights.ts
 │   ├── lib/                   # answer-highlights (CSS highlights over
 │   │                          # attributed phrases), source-copy, utils
@@ -355,9 +353,8 @@ extension/
     ├── panel.html
     ├── panel.js               # generated React/AI Elements bundle (committed)
     ├── panel.css              # generated Tailwind/theme bundle (committed)
-    ├── panel-logic.js         # summary prompts, follow-up suggestion
-    │                          # protocol, and heatmap span resolver
-    └── tokenpath.js           # streaming generation + heatmap client
+    ├── panel-logic.js         # summary prompts and follow-up suggestions
+    └── tokenpath.js           # streaming generation + attribution client
 ```
 
 Test instructions and coverage are in
