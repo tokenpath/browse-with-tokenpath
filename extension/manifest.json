@@ -44,6 +44,22 @@
       "all_frames": true,
       "match_about_blank": true,
       "match_origin_as_fallback": true
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://claude.ai/*"
+      ],
+      "js": [
+        "text-fragments.js",
+        "chat-sources.js",
+        "chat-citations.js"
+      ],
+      "css": [
+        "chat-citations.css"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "action": {

@@ -14,7 +14,8 @@
     "setup:test": "playwright install chromium && bash test/setup-libs.sh",
     "test:unit": "node --test test/*.test.cjs",
     "test:e2e": "node test/e2e.mjs",
-    "test": "npm run check && npm run test:unit && npm run test:e2e"
+    "test:e2e:chat": "node test/e2e-chat-citations.mjs",
+    "test": "npm run check && npm run test:unit && npm run test:e2e && npm run test:e2e:chat"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

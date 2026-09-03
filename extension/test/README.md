@@ -13,7 +13,8 @@ npm test
 ```
 
 `npm test` is `npm run check` (typecheck, the `checkJs` pass over the build-free
-scripts, and the Vite build) followed by the unit and browser suites.
+scripts, and the Vite build) followed by the unit suite and both browser suites
+(`test:e2e` and `test:e2e:chat`).
 `setup:test` installs Chromium and runs `setup-libs.sh`, which is a no-op
 outside Debian/Ubuntu — running it on macOS is safe and does nothing.
 
@@ -61,6 +62,21 @@ The files today:
   downloads, signature and 50 MiB limits, strict native-viewer reply binding,
   Unicode-safe 400,000-character truncation, scan/timeout/abort failures, and
   unconditional hidden-viewer cleanup.
+- **`chat-citations.test.cjs`** covers chat citation mode's pure logic against
+  the real shipped files: `#:~:text=` directives (ambiguous-only context, long
+  targets as `textStart,textEnd`, surrogate-safe bounds, escaped fragment
+  grammar), canonical cited URLs (`utm_*` and tracking parameters stripped,
+  non-HTTP schemes and embedded credentials rejected), the chip-versus-prose
+  test, the readability pass (page chrome dropped, a shell `<main>` falling back
+  to the body, an unclosed `<script>`, entity decoding, block newlines,
+  boundary-safe truncation), packing several cited pages into one document with
+  regions that slice back exactly, and mapping the returned spans back —
+  including the confidence threshold, a span in a header or across two sources,
+  overlap resolution, badge wording, and hover text. It also drives the offset
+  helpers inside `chat-citations.js` through its `__tokenpathChatCitationHooks`
+  export (which the harness creates before evaluation, proving the script stays
+  inert on a real page): whitespace collapse with per-character source indexes,
+  single-node and element-crossing spans, detached nodes, and answer keys.
 - **`background.test.cjs`** holds `chrome.sidePanel.open()` unresolved and proves
   that capture still proceeds immediately. It also verifies exact-frame warm
   injection, retries for missing receivers and stale “page changed” responses,
@@ -71,7 +87,13 @@ The files today:
   capture, full-document descriptor routing for no-selection clicks,
   exact-frame full-page HTML routing, bounded/contextual text-fragment encoding
   (including Unicode and reserved grammar), URL-commit-before-reload ordering,
-  and clearing highlights without losing ordinary PDF anchors.
+  and clearing highlights without losing ordinary PDF anchors. Chat citation
+  mode is covered end to end through the worker's message handler: the same page
+  cited twice is read once, cookies are never sent to a cited page, unreadable
+  sources are dropped rather than sent empty, both readable sources are packed
+  into one `/v1/attributions` call, per-source links point at the passage, a
+  streamed body decodes across chunk boundaries, warm reads spend no second
+  fetch, and every failure comes back as wording the badge can show.
 
 ## Browser integration
 
@@ -169,6 +191,39 @@ spending and replaces the **Summarize** starter with a summarize chip, and
 custom instructions reach generation with the suffix and tail after them and
 reset in one tap.
 
+### Chat citation mode
+
+```bash
+npm run test:e2e:chat
+```
+
+`e2e-chat-citations.mjs` is a self-contained browser suite for the part of chat
+citation mode that cannot be unit tested. It serves ChatGPT-shaped and
+Claude-shaped fixtures from their real origins (so `location.hostname` matches
+the declared content script), evaluates the three real scripts in the load order
+the manifest declares, and stubs only what lives outside the page — the
+`chrome.runtime.sendMessage` reply computes its answer spans *from the answer
+string the content script sent*, so a mistake in extraction shows up as a link
+on the wrong words instead of being hidden behind a fixed offset. It covers a
+still-streaming answer being left alone (ChatGPT's stop button, Claude's
+`data-is-streaming`), the answer string excluding citation chips and interface
+text, cited URLs collected with their tracking parameters stripped, the
+preceding user turn becoming the question, a phrase crossing a `<strong>`
+boundary wrapped exactly across two nodes with one shared target, safe link
+attributes and hover text, the badge wording, a re-render re-applying from cache
+without a second request, **Off** clearing every injection and persisting the
+per-host switch, a later answer ignored while the site is off, one badge per
+message where Claude's selectors nest, a failure reporting in the badge and
+recovering through **Retry**, and an answer edited in place being attributed
+again rather than answered from the cache keyed by the old text.
+
+An environment that cannot download Playwright's pinned Chromium can point the
+suite at an existing build:
+
+```bash
+E2E_CHROMIUM_PATH=/path/to/chrome npm run test:e2e:chat
+```
+
 ### Live public sites
 
 The checks against real third-party pages (Example, Wikipedia, GNU, MDN, Hacker
@@ -223,6 +278,16 @@ unique remapping, chat restore after leaving and returning to a page, working
 attribution after a page refresh, and searchable-PDF selection or full-document
 capture/highlight/clear behavior. Check that **Clear chat** affects only the
 current page and that **Disconnect** clears every saved chat.
+
+Chat citation mode needs a manual pass against the real apps, because their
+DOM is the one thing no fixture can pin: on `chatgpt.com` and on `claude.ai`,
+ask a question that triggers web search, and confirm that the answer is left
+alone while it streams, that phrases become underlined a second or two after it
+finishes, that clicking one opens the cited page scrolled to the passage, that
+the badge's source count matches the chips on screen, that **Retry** and **Off**
+behave, and that the Settings switch turns the mode off on both sites and back
+on. Worth checking too that an answer with no citations, and a chat with an
+uploaded file, are both left completely untouched.
 
 Restricted pages such as `chrome://` remain unavailable to content scripts by
 design; PDFs are handled separately through Chrome's native viewer. The PDF pass

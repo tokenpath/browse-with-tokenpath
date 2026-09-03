@@ -28,6 +28,11 @@ const tabUpdateListeners = new Set();
 const tabRemovedListeners = new Set();
 const tabUrls = new Map();
 const sessionStore = new Map();
+const localStore = new Map([["tokenpathKey", "tp-test-key"]]);
+// Every fetch the worker makes in chat citation mode: the cited pages, and
+// the TokenPath attribution call. Each test sets what it needs.
+const fetchCalls = [];
+let fetchImpl = () => Promise.reject(new Error("no fetch stub installed"));
 const contextMenuItems = new Map([
   [
     "tldr-capture",
@@ -209,6 +214,32 @@ const chrome = {
     },
   },
   storage: {
+    // sidepanel/tokenpath.js reads the key and base URL from here; the worker
+    // imports that client for chat citation mode.
+    local: {
+      get(keys) {
+        const requested = Array.isArray(keys) ? keys : [keys];
+        return Promise.resolve(
+          Object.fromEntries(
+            requested
+              .filter((key) => localStore.has(key))
+              .map((key) => [key, localStore.get(key)])
+          )
+        );
+      },
+      set(value) {
+        for (const [key, stored] of Object.entries(value)) {
+          localStore.set(key, stored);
+        }
+        return Promise.resolve();
+      },
+      remove(keys) {
+        for (const key of Array.isArray(keys) ? keys : [keys]) {
+          localStore.delete(key);
+        }
+        return Promise.resolve();
+      },
+    },
     // Backed by a real store: the applied-PDF-URL short-circuit has to survive
     // a service-worker restart, which is what makes it worth persisting.
     session: {
@@ -246,17 +277,45 @@ const source = readFileSync(join(__dirname, "..", "background.js"), "utf8");
 // file on the next event, so "start a fresh worker over the same session
 // storage" is an ordinary occurrence, not an exotic one.
 function startWorker() {
-  const context = {
+  const context = vm.createContext({
+    AbortController,
+    TextDecoder,
+    TextEncoder,
     chrome,
     console: { error() {}, warn() {} },
     Date,
     Promise,
     Math,
     URL,
+    URLSearchParams,
     clearTimeout,
     setTimeout,
+    fetch(input, init) {
+      fetchCalls.push([String(input), init]);
+      return fetchImpl(String(input), init);
+    },
+  });
+  context.globalThis = context;
+  // The real worker loads the shared text-fragment helpers, the chat source
+  // logic, and the TokenPath client with importScripts, in this order. Run
+  // them in the same context so the suite exercises the same globals the
+  // worker sees rather than a stand-in.
+  context.importScripts = (...files) => {
+    for (const file of files) {
+      vm.runInContext(readFileSync(join(__dirname, "..", file), "utf8"), context, {
+        filename: file,
+      });
+    }
   };
-  vm.runInNewContext(source, context);
+  vm.runInContext(source, context, { filename: "background.js" });
+  // A top-level `const` in a classic script — imported or not — is a global
+  // lexical binding, not a property of the global object, in a worker exactly
+  // as in this sandbox. background.js reads them by name; the suite has to ask
+  // the context for them.
+  context.importedGlobals = vm.runInContext(
+    "({ TokenPath, TokenPathChatSources, TokenPathTextFragments })",
+    context
+  );
   return context;
 }
 const sandbox = startWorker();
@@ -1144,9 +1203,11 @@ assert.ok(installedHandler, "context-menu installer registered");
   const splitBoundaryPrefix = `${"x".repeat(9)}👩${"y".repeat(126)}`;
   const splitBoundaryText = `${splitBoundaryPrefix} target`;
   assert.ok(
-    sandbox
-      .safePdfSlice(splitBoundaryText, 10, splitBoundaryPrefix.length + 1)
-      .startsWith("👩"),
+    sandbox.importedGlobals.TokenPathTextFragments.safeSlice(
+      splitBoundaryText,
+      10,
+      splitBoundaryPrefix.length + 1
+    ).startsWith("👩"),
     "bounded context must not split an emoji surrogate pair"
   );
 
@@ -1273,6 +1334,259 @@ assert.ok(installedHandler, "context-menu installer registered");
     "a stale PDF panel must never navigate or rewrite its old document"
   );
   console.log("PASS: stale PDF attribution cannot restore a departed tab");
+
+
+  // --- Chat citation mode ---------------------------------------------------
+  //
+  // One message from the chat content script has to become: a read of each
+  // cited page, one packed attribution request, and per-source links back.
+
+  const CITED_PAGE = (body) =>
+    `<html><head><title>Cited page</title></head><body><article><p>${body}</p>` +
+    `<p>${"Filler prose so the article region is substantial. ".repeat(12)}</p>` +
+    `</article></body></html>`;
+
+  function htmlResponse(body) {
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: (name) => (/content-type/i.test(name) ? "text/html; charset=utf-8" : null) },
+      body: null,
+      text: () => Promise.resolve(CITED_PAGE(body)),
+    };
+  }
+
+  let attributionRequests = [];
+  let attributionSpansFor = () => [];
+  fetchImpl = (url, init) => {
+    if (url.startsWith("https://api.tokenpath.ai/")) {
+      const payload = JSON.parse(init.body);
+      attributionRequests.push(payload);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            offset_encoding: "utf-16",
+            spans: attributionSpansFor(payload),
+          }),
+      });
+    }
+    if (url === "https://a.example/one") {
+      return Promise.resolve(htmlResponse("Alpha reports the rate rose to 18% in June."));
+    }
+    if (url === "https://b.example/two") {
+      return Promise.resolve(htmlResponse("Beta says the programme covered 40,000 households."));
+    }
+    if (url === "https://e.example/streamed") {
+      // The real path reads response.body in chunks, and a chunk boundary can
+      // fall inside a multi-byte character.
+      const bytes = new TextEncoder().encode(CITED_PAGE("Gamma measured 3°C warming."));
+      const split = bytes.indexOf(0xc2);
+      const chunks = [bytes.slice(0, split + 1), bytes.slice(split + 1)];
+      let index = 0;
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => "text/html" },
+        body: {
+          getReader: () => ({
+            read: () =>
+              Promise.resolve(
+                index < chunks.length
+                  ? { done: false, value: chunks[index++] }
+                  : { done: true, value: undefined }
+              ),
+            cancel: () => Promise.resolve(),
+          }),
+        },
+      });
+    }
+    if (url === "https://c.example/paywall") {
+      return Promise.resolve({ ok: false, status: 403, headers: { get: () => null } });
+    }
+    return Promise.reject(new TypeError("Failed to fetch"));
+  };
+
+  const CHAT_ANSWER =
+    "The rate rose to 18% in June, and the programme covered 40,000 households.";
+  attributionSpansFor = (payload) => {
+    const spanFor = (answerText, sourceText, confidence) => {
+      const answerStart = payload.answer.indexOf(answerText);
+      const sourceStart = payload.document.indexOf(sourceText);
+      return {
+        answer: {
+          start: answerStart,
+          end: answerStart + answerText.length,
+          text: answerText,
+        },
+        source: {
+          start: sourceStart,
+          end: sourceStart + sourceText.length,
+          text: sourceText,
+          confidence,
+        },
+      };
+    };
+    return [
+      spanFor("18%", "18% in June", 0.9),
+      spanFor("40,000 households", "40,000 households", 0.8),
+    ];
+  };
+
+  const chatFetchStart = fetchCalls.length;
+  const chatResult = await dispatchRuntimeMessage({
+    type: "chat-citations-attribute",
+    answer: CHAT_ANSWER,
+    question: "What happened to the rate in June?",
+    urls: [
+      "https://a.example/one?utm_source=chatgpt.com",
+      "https://a.example/one",
+      "https://b.example/two",
+      "https://c.example/paywall",
+      "javascript:alert(1)",
+    ],
+  });
+  assert.strictEqual(chatResult.ok, true);
+  assert.deepStrictEqual({ ...chatResult.stats }, {
+    requested: 3,
+    fetched: 2,
+    spans: 2,
+  });
+  assert.strictEqual(
+    fetchCalls
+      .slice(chatFetchStart)
+      .filter(([url]) => url === "https://a.example/one").length,
+    1,
+    "the same page cited twice in one answer is read once"
+  );
+  assert.strictEqual(
+    fetchCalls.slice(chatFetchStart).some(([, init]) => init.credentials !== "omit" && init.method !== "POST"),
+    false,
+    "a cited third-party page is read without the user's cookies"
+  );
+  assert.strictEqual(attributionRequests.length, 1, "one request per message");
+  assert.strictEqual(attributionRequests[0].offset_encoding, "utf-16");
+  assert.strictEqual(attributionRequests[0].answer, CHAT_ANSWER);
+  assert.ok(
+    attributionRequests[0].document.includes("=== Source 1: https://a.example/one ===") &&
+      attributionRequests[0].document.includes("=== Source 2: https://b.example/two ==="),
+    "both readable sources are packed into the one attributed document"
+  );
+  assert.ok(
+    !attributionRequests[0].document.includes("c.example/paywall"),
+    "a source that could not be read is dropped rather than sent empty"
+  );
+  assert.deepStrictEqual(
+    [...chatResult.attributions].map((attribution) => [
+      attribution.answer.text,
+      attribution.source.url,
+    ]),
+    [
+      ["18%", "https://a.example/one"],
+      ["40,000 households", "https://b.example/two"],
+    ]
+  );
+  assert.ok(
+    chatResult.attributions[1].source.link.startsWith(
+      "https://b.example/two#:~:text="
+    ),
+    chatResult.attributions[1].source.link
+  );
+  assert.strictEqual(
+    decodeURIComponent(
+      chatResult.attributions[1].source.link.split("#:~:text=")[1]
+    ),
+    "40,000 households",
+    "a source link points at the passage, not just the page"
+  );
+  console.log("PASS: chat citations pack cited pages into one attribution call");
+
+  const warmFetchStart = fetchCalls.length;
+  attributionRequests = [];
+  const warmResult = await dispatchRuntimeMessage({
+    type: "chat-citations-attribute",
+    answer: `${CHAT_ANSWER} A second answer in the same conversation.`,
+    question: "And after that?",
+    urls: ["https://a.example/one", "https://b.example/two"],
+  });
+  assert.strictEqual(warmResult.ok, true);
+  assert.strictEqual(
+    fetchCalls
+      .slice(warmFetchStart)
+      .filter(([url]) => !url.startsWith("https://api.tokenpath.ai/")).length,
+    0,
+    "a later answer citing the same pages spends no further reads"
+  );
+  console.log("PASS: cited pages are cached for the worker's lifetime");
+
+  attributionRequests = [];
+  attributionSpansFor = () => [];
+  const streamedResult = await dispatchRuntimeMessage({
+    type: "chat-citations-attribute",
+    answer: CHAT_ANSWER,
+    question: "How much warming?",
+    urls: ["https://e.example/streamed"],
+  });
+  assert.strictEqual(streamedResult.ok, true);
+  assert.ok(
+    attributionRequests[0].document.includes("Gamma measured 3°C warming."),
+    "a streamed body decodes across chunk boundaries"
+  );
+  console.log("PASS: a cited page read in chunks decodes whole characters");
+
+  const noSourceResult = await dispatchRuntimeMessage({
+    type: "chat-citations-attribute",
+    answer: CHAT_ANSWER,
+    question: "What happened?",
+    urls: ["javascript:alert(1)", "not a url"],
+  });
+  assert.strictEqual(noSourceResult.ok, true);
+  assert.strictEqual([...noSourceResult.attributions].length, 0);
+  assert.deepStrictEqual({ ...noSourceResult.stats }, {
+    requested: 0,
+    fetched: 0,
+    spans: 0,
+  });
+
+  const unreadableResult = await dispatchRuntimeMessage({
+    type: "chat-citations-attribute",
+    answer: CHAT_ANSWER,
+    question: "What happened?",
+    urls: ["https://c.example/paywall", "https://d.example/offline"],
+  });
+  assert.strictEqual(unreadableResult.ok, true);
+  assert.deepStrictEqual({ ...unreadableResult.stats }, {
+    requested: 2,
+    fetched: 0,
+    spans: 0,
+  });
+  assert.strictEqual([...unreadableResult.attributions].length, 0);
+  console.log("PASS: unreadable or absent sources report instead of attributing");
+
+  const shortResult = await dispatchRuntimeMessage({
+    type: "chat-citations-attribute",
+    answer: "Yes.",
+    question: "Did it?",
+    urls: ["https://a.example/one"],
+  });
+  assert.strictEqual(shortResult.ok, false);
+
+  localStore.delete("tokenpathKey");
+  const disconnectedResult = await dispatchRuntimeMessage({
+    type: "chat-citations-attribute",
+    answer: CHAT_ANSWER,
+    question: "What happened?",
+    urls: ["https://a.example/one"],
+  });
+  assert.strictEqual(disconnectedResult.ok, false);
+  assert.strictEqual(
+    disconnectedResult.error,
+    "connect TokenPath in the side panel",
+    "a missing key is a wording the badge can show, not a bare failure"
+  );
+  localStore.set("tokenpathKey", "tp-test-key");
+  console.log("PASS: chat citation failures come back as badge wording");
 
   console.log("\nAll background assertions passed.");
 })().catch((error) => {

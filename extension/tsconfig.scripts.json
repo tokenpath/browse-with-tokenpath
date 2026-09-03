@@ -15,7 +15,10 @@
   "files": [
     "scripts-globals.d.ts",
     "background.js",
+    "chat-citations.js",
+    "chat-sources.js",
     "content.js",
+    "text-fragments.js",
     "sidepanel/panel-logic.js",
     "sidepanel/tokenpath.js"
   ]

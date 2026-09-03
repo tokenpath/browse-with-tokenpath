@@ -10,7 +10,7 @@
 The side panel is an extension page, so declared host permissions let it call
 TokenPath without a proxy backend. The API key lives in `chrome.storage.local`.
 
-The extension uses four requests:
+The extension uses four requests, and chat citation mode reuses the fourth:
 
 1. `GET https://api.tokenpath.ai/v1/me/credits` validates the TokenPath key and
    refreshes the displayed balance.
@@ -268,6 +268,39 @@ The adapter verifies:
   slice to the returned `text` exactly;
 - confidences are finite values from `0` through `1`; and
 - a nullable source is accepted but omitted from clickable results.
+
+### Chat citation mode: several sources, one request
+
+Chat citation mode (see `spec.md`) attributes an answer ChatGPT or Claude wrote
+against the pages that answer cited. It is the same endpoint and the same
+client — `background.js` `importScripts` `sidepanel/tokenpath.js`, so the chat
+path carries the same `X-TokenPath-Client` header, spends the same allowance,
+and maps errors the same way — with one difference: `/v1/attributions` takes
+**one** document and a chat answer cites several pages.
+
+So `chat-sources.js` packs them into one document, a header line per source:
+
+```text
+=== Source 1: https://example.com/a ===
+<the first page's readable text>
+
+=== Source 2: https://example.org/b ===
+<the second page's readable text>
+```
+
+Each source's text region is recorded as `[start, end)` in that document, and
+every returned source span is rebased onto the page it landed in — a click has
+to open that page, not the packed document. A span that straddles two sources,
+or that lands in a header line rather than in prose, names no single page and is
+dropped; so is one below `0.4` confidence. Answer offsets pass through
+untouched: they index the exact answer string the content script extracted from
+the page.
+
+The request is otherwise identical, including `offset_encoding: "utf-16"`, and
+the response goes through the same `normalizeAttributionResponse` validation, so
+a malformed span cannot reach the DOM. `question` is the user turn that produced
+the answer; a conversation restored without it falls back to a fixed neutral
+question rather than sending an empty one, which the endpoint rejects.
 
 Rendered Markdown cannot be indexed directly because delimiters, entities,
 hidden destinations, and block structure alter its DOM text.

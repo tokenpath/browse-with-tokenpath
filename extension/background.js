@@ -7,6 +7,14 @@
 //  - stash the extracted text (keyed by tabId) in session storage and notify
 //    an already-open panel.
 //  - translate PDF source ranges into native text-fragment navigation.
+//  - for chat citation mode: read the pages a chat answer cites, attribute the
+//    answer against them, and hand the content script per-source links.
+//
+// The chat pipeline lives here because a content script cannot fetch a cited
+// origin and the side panel may not be open. `importScripts` is the same
+// load order sidepanel/panel.html uses for these files.
+
+importScripts("text-fragments.js", "chat-sources.js", "sidepanel/tokenpath.js");
 
 const MENU_ID = "tokenpath-chat";
 const MENU_CONTEXTS = ["selection", "page", "frame"];
@@ -252,6 +260,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           ok: false,
           error: "Couldn't read this page.",
         })
+      );
+    return true;
+  }
+
+  if (message?.type === "chat-citations-attribute") {
+    attributeChatAnswer(message)
+      .then((result) => sendResponse(result))
+      .catch(() =>
+        sendResponse({ ok: false, error: "couldn't attribute this answer" })
       );
     return true;
   }
@@ -619,153 +636,19 @@ function samePdfResourceUrl(left, right) {
 }
 
 function buildPdfTextFragment(documentText, rawStart, rawEnd) {
-  const document = String(documentText || "");
-  if (
-    !document ||
-    !Number.isInteger(rawStart) ||
-    !Number.isInteger(rawEnd) ||
-    rawStart < 0 ||
-    rawEnd <= rawStart ||
-    rawEnd > document.length
-  ) {
-    return null;
-  }
-
-  let start = rawStart;
-  let end = rawEnd;
-  if (
-    isLowSurrogate(document.charCodeAt(start)) &&
-    isHighSurrogate(document.charCodeAt(start - 1))
-  ) {
-    start--;
-  }
-  if (
-    isHighSurrogate(document.charCodeAt(end - 1)) &&
-    isLowSurrogate(document.charCodeAt(end))
-  ) {
-    end++;
-  }
-  while (start < end && /\s/u.test(document[start])) start++;
-  while (end > start && /\s/u.test(document[end - 1])) end--;
-  const target = normalizePdfFragmentText(safePdfSlice(document, start, end));
-  if (!target) return null;
-
-  const prefix = pdfFragmentContext(
-    safePdfSlice(
-      document,
-      Math.max(0, start - PDF_FRAGMENT_CONTEXT_CHARS * 2),
-      start
-    ),
-    "end"
-  );
-  const suffix = pdfFragmentContext(
-    safePdfSlice(
-      document,
-      end,
-      Math.min(document.length, end + PDF_FRAGMENT_CONTEXT_CHARS * 2)
-    ),
-    "start"
-  );
-  const targetCodePoints = Array.from(target);
-  const textStart =
-    targetCodePoints.length <= PDF_FRAGMENT_FULL_TARGET_CHARS
-      ? target
-      : pdfFragmentContext(target, "start", PDF_FRAGMENT_EDGE_CHARS);
-  const textEnd =
-    targetCodePoints.length <= PDF_FRAGMENT_FULL_TARGET_CHARS
-      ? ""
-      : pdfFragmentContext(target, "end", PDF_FRAGMENT_EDGE_CHARS);
-
-  return (
-    (prefix ? `${encodePdfFragmentPart(prefix)}-,` : "") +
-    encodePdfFragmentPart(textStart) +
-    (textEnd ? `,${encodePdfFragmentPart(textEnd)}` : "") +
-    (suffix ? `,-${encodePdfFragmentPart(suffix)}` : "")
-  );
-}
-
-function safePdfSlice(value, rawStart, rawEnd) {
-  let start = Math.max(0, rawStart);
-  let end = Math.min(value.length, rawEnd);
-  if (
-    isLowSurrogate(value.charCodeAt(start)) &&
-    isHighSurrogate(value.charCodeAt(start - 1))
-  ) {
-    start--;
-  }
-  if (
-    isHighSurrogate(value.charCodeAt(end - 1)) &&
-    isLowSurrogate(value.charCodeAt(end))
-  ) {
-    end++;
-  }
-  return value.slice(start, end);
-}
-
-function isHighSurrogate(codeUnit) {
-  return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
-}
-
-function isLowSurrogate(codeUnit) {
-  return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
-}
-
-function normalizePdfFragmentText(value) {
-  return String(value || "")
-    // Soft/zero-width separators are commonly injected into extracted PDF
-    // text. Keep ZWNJ/ZWJ: unlike those separators, they can be meaningful
-    // parts of Persian text and emoji sequences.
-    .replace(/[\u00ad\u200b\u2060\ufeff]/gu, "")
-    .replace(/\s+/gu, " ")
-    .trim();
-}
-
-function pdfFragmentContext(
-  value,
-  edge,
-  maxCharacters = PDF_FRAGMENT_CONTEXT_CHARS
-) {
-  const clean = normalizePdfFragmentText(value);
-  if (!clean) return "";
-  const codePoints = Array.from(clean);
-  if (codePoints.length <= maxCharacters) return clean;
-
-  const clipped =
-    edge === "end"
-      ? codePoints.slice(-maxCharacters).join("")
-      : codePoints.slice(0, maxCharacters).join("");
-  // Prefer whole words, but keep the clipped text for scripts without spaces.
-  if (!/\s/u.test(clipped)) return clipped;
-  return edge === "end"
-    ? clipped.replace(/^\S+\s+/u, "")
-    : clipped.replace(/\s+\S*$/u, "");
-}
-
-function encodePdfFragmentPart(value) {
-  // Text-fragment commas and `-,` / `,-` pairs are structural. Encode every
-  // punctuation character that encodeURIComponent leaves unescaped so source
-  // prose cannot accidentally become part of the directive grammar.
-  return encodeURIComponent(value).replace(
-    /[!'()*-]/g,
-    (character) =>
-      `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`
-  );
+  return TokenPathTextFragments.build(documentText, rawStart, rawEnd, {
+    contextChars: PDF_FRAGMENT_CONTEXT_CHARS,
+    edgeChars: PDF_FRAGMENT_EDGE_CHARS,
+    fullTargetChars: PDF_FRAGMENT_FULL_TARGET_CHARS,
+  });
 }
 
 function withTextFragment(rawUrl, directive) {
-  const base = withoutTextFragment(rawUrl);
-  return base.includes("#")
-    ? `${base}:~:text=${directive}`
-    : `${base}#:~:text=${directive}`;
+  return TokenPathTextFragments.withDirective(rawUrl, directive);
 }
 
 function withoutTextFragment(rawUrl) {
-  const hashIndex = rawUrl.indexOf("#");
-  if (hashIndex < 0) return rawUrl;
-  const directiveIndex = rawUrl.indexOf(":~:", hashIndex + 1);
-  if (directiveIndex < 0) return rawUrl;
-  const base = rawUrl.slice(0, directiveIndex);
-  return base.endsWith("#") ? base.slice(0, -1) : base;
+  return TokenPathTextFragments.withoutDirective(rawUrl);
 }
 
 function beginPdfOperation(tabId) {
@@ -895,4 +778,183 @@ function sameUrl(left, right) {
   } catch {
     return left === right;
   }
+}
+
+// --- Chat citation mode -----------------------------------------------------
+//
+// One request per finished assistant message: read the cited pages, pack them
+// into the single document /v1/attributions takes, and return each attributed
+// answer phrase with a link into the page it came from.
+
+const CHAT_SOURCE_TIMEOUT_MS = 8_000;
+// Fetched sources are keyed by canonical URL for this worker's lifetime, which
+// is what makes several answers in one chat citing the same pages one read
+// each. MV3 suspends the worker after ~30s idle, so this is a warm-path cache,
+// not a promise of persistence.
+const MAX_CACHED_CHAT_SOURCES = 32;
+const chatSourceCache = new Map();
+
+async function attributeChatAnswer(message) {
+  const answer = typeof message?.answer === "string" ? message.answer : "";
+  const question =
+    typeof message?.question === "string" && message.question.trim()
+      ? message.question
+      : "What do the cited sources say?";
+  if (
+    answer.length < TokenPathChatSources.MIN_ANSWER_CHARS ||
+    answer.length > TokenPathChatSources.MAX_ANSWER_CHARS
+  ) {
+    return { ok: false, error: "answer too short or too long to attribute" };
+  }
+
+  const urls = [];
+  for (const raw of Array.isArray(message?.urls) ? message.urls : []) {
+    const url = TokenPathChatSources.normalizeSourceUrl(raw);
+    if (url && !urls.includes(url)) urls.push(url);
+    if (urls.length >= TokenPathChatSources.MAX_SOURCES) break;
+  }
+  if (!urls.length) {
+    return {
+      ok: true,
+      attributions: [],
+      stats: { requested: 0, fetched: 0, spans: 0 },
+    };
+  }
+
+  const read = await Promise.all(urls.map((url) => readChatSource(url)));
+  const { document: packed, regions } = TokenPathChatSources.packSources(
+    read.filter((source) => source.text)
+  );
+  if (!regions.length) {
+    return {
+      ok: true,
+      attributions: [],
+      stats: { requested: urls.length, fetched: 0, spans: 0 },
+    };
+  }
+
+  let spans;
+  try {
+    spans = await TokenPath.attributions({
+      document: packed,
+      question,
+      answer,
+    });
+  } catch (error) {
+    return { ok: false, error: chatAttributionError(error) };
+  }
+  const attributions = TokenPathChatSources.resolveAttributions({
+    spans,
+    regions,
+  });
+  return {
+    ok: true,
+    attributions,
+    stats: {
+      requested: urls.length,
+      fetched: regions.length,
+      spans: attributions.length,
+    },
+  };
+}
+
+function chatAttributionError(error) {
+  if (!(error instanceof TokenPath.Error)) {
+    return "couldn't attribute this answer";
+  }
+  switch (error.code) {
+    case "not_connected":
+      return "connect TokenPath in the side panel";
+    case "timeout":
+      return "TokenPath took too long";
+    case "network_error":
+      return "couldn't reach TokenPath";
+    default:
+      break;
+  }
+  if (error.status === 401 || error.status === 403) return "TokenPath key rejected";
+  if (error.status === 402) return "out of TokenPath tokens";
+  if (error.status === 429) return "rate limited — retry shortly";
+  return "couldn't attribute this answer";
+}
+
+async function readChatSource(url) {
+  const cached = chatSourceCache.get(url);
+  if (cached) return cached;
+  const record = await fetchChatSource(url);
+  chatSourceCache.set(url, record);
+  while (chatSourceCache.size > MAX_CACHED_CHAT_SOURCES) {
+    const oldest = chatSourceCache.keys().next();
+    if (oldest.done) break;
+    chatSourceCache.delete(oldest.value);
+  }
+  return record;
+}
+
+// A cited page is a third party. It is read anonymously — no cookies, so no
+// logged-in session of the user's is ever spent on it, and a paywall or a bot
+// wall simply fails and is reported as a dropped source rather than retried
+// with credentials.
+async function fetchChatSource(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHAT_SOURCE_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      credentials: "omit",
+      headers: { Accept: "text/html,application/xhtml+xml" },
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    if (!response.ok) return { url, error: `HTTP ${response.status}` };
+    if (
+      !TokenPathChatSources.isReadableContentType(
+        response.headers.get("content-type")
+      )
+    ) {
+      return { url, error: "not a web page" };
+    }
+    const html = await readBoundedResponseText(
+      response,
+      TokenPathChatSources.MAX_SOURCE_BYTES
+    );
+    const text = TokenPathChatSources.extractReadableText(html);
+    if (!text) return { url, error: "no readable text" };
+    return { url, text, title: chatSourceTitle(html) };
+  } catch (error) {
+    return {
+      url,
+      error: controller.signal.aborted ? "timed out" : "unreachable",
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Stop reading at the cap instead of buffering a whole media file that
+// claimed to be HTML.
+async function readBoundedResponseText(response, maxBytes) {
+  const reader = response.body?.getReader();
+  if (!reader) return await response.text();
+  const decoder = new TextDecoder("utf-8");
+  let text = "";
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+      if (bytes >= maxBytes) break;
+    }
+  } finally {
+    // A break out of the loop leaves the body open; nothing else reads it.
+    void reader.cancel().catch(() => {});
+  }
+  return text + decoder.decode();
+}
+
+function chatSourceTitle(html) {
+  const match = /<title\b[^<>]*>([\s\S]{0,300}?)<\/title\s*>/i.exec(html);
+  if (!match) return "";
+  return match[1].replace(/\s+/g, " ").trim();
 }

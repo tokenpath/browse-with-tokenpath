@@ -1,0 +1,64 @@
+/* TokenPath — chat citation mode.
+   Injected into chatgpt.com and claude.ai. Both apps style their own links,
+   so an attributed phrase is marked with an underline rather than a colour:
+   it has to read as "this phrase has a source" without competing with the
+   app's own links or with the surrounding text. `currentColor` keeps that
+   true in either app, in light and dark, without reading their theme. */
+a.tokenpath-attr,
+a.tokenpath-attr:visited {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+a.tokenpath-attr:hover,
+a.tokenpath-attr:focus-visible {
+  text-decoration-style: solid;
+  text-decoration-thickness: 2px;
+  text-decoration-color: currentColor;
+  background-color: color-mix(in srgb, currentColor 8%, transparent);
+  border-radius: 2px;
+}
+
+/* The status line under a processed message: what was read, what was linked,
+   and the two controls the feature needs (attribute again, and turn it off
+   for this site). Deliberately quiet — it sits under every answer. */
+.tokenpath-chat-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  opacity: 0.6;
+  user-select: none;
+}
+
+.tokenpath-chat-badge:hover {
+  opacity: 1;
+}
+
+.tokenpath-chat-badge-text {
+  font-variant-numeric: tabular-nums;
+}
+
+.tokenpath-chat-badge-action {
+  all: unset;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 999px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tokenpath-chat-badge-action:hover,
+.tokenpath-chat-badge-action:focus-visible {
+  border-color: currentColor;
+  background-color: color-mix(in srgb, currentColor 10%, transparent);
+}

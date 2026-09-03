@@ -15,6 +15,14 @@ phrase or choosing one from the answer's **Sources** list highlights its returne
 supporting source range, and scrolls there in the live page or PDF — or, for a
 transcript capture, seeks the player to the caption cue that supports it.
 
+The same attribution also runs on somebody else's answer. In **chat citation
+mode** the extension watches `chatgpt.com` and `claude.ai`, and when an
+assistant message that cites the web finishes rendering it reads the cited
+pages, attributes that answer against them, and turns the attributed phrases
+into links that open each source at its supporting passage. No side panel and
+no capture are involved: the answer is already on screen, and the only thing
+added to the page is the links and one status line.
+
 ## User flow
 
 1. Enter through the toolbar icon or through **Chat with TokenPath** on a page,
@@ -44,8 +52,13 @@ transcript capture, seeks the player to the caption cue that supports it.
    text in the originating page frame or PDF.
 6. The header gear opens an in-panel **Settings** view over the conversation:
    whether new pages are summarized automatically, which summary shape is the
-   default, whether follow-ups are suggested, and — collapsed — the summary
-   instructions themselves.
+   default, whether follow-ups are suggested, whether chat citation mode runs
+   on ChatGPT and Claude, and — collapsed — the summary instructions themselves.
+7. Chat citation mode needs no entry point. On `chatgpt.com` and `claude.ai`,
+   a finished assistant message with at least one web citation gets its
+   attributed phrases underlined within a few seconds, plus one status line
+   saying how many cited pages were read and how many phrases were linked.
+   Clicking a phrase opens that source in a new tab at the supporting passage.
 
 ## Components
 
@@ -57,15 +70,40 @@ transcript capture, seeks the player to the caption cue that supports it.
   invalidation, stale-seed checks) and downloads full PDFs from the panel;
   `scripts/package-extension.mjs` documents the policy and strips only the
   staging and localhost development origins.
+- **`manifest.json`** additionally declares a second, narrow content script —
+  `text-fragments.js`, `chat-sources.js`, `chat-citations.js` and
+  `chat-citations.css` — matching only `https://chatgpt.com/*`,
+  `https://chat.openai.com/*`, and `https://claude.ai/*` at `document_idle`.
 - **`background.js`** owns the single **Chat with TokenPath** context-menu item
   (and removes the legacy submenu items on startup); handles the toolbar action;
   starts the side-panel open; captures from `info.frameId`; detects native PDFs;
   stores and broadcasts a versioned selection seed; serves the panel's
-  `capture-tab-for-chat` request; and owns PDF text-fragment navigation/reload.
+  `capture-tab-for-chat` request; owns PDF text-fragment navigation/reload; and
+  serves chat citation mode's one request per message — reading the cited
+  pages, calling `/v1/attributions` once against them, and returning per-source
+  links. It `importScripts` the shared text-fragment helpers, the chat source
+  logic, and `sidepanel/tokenpath.js`, so the chat path spends and fails
+  through exactly the same client as the panel.
 - **`content.js`** snapshots selections, creates the canonical text-to-DOM map,
   extracts full rendered pages when requested, resolves document offsets,
   repairs mappings after supported DOM rerenders, renders the source highlight,
   and scrolls nested panes.
+- **`chat-citations.js`** is the chat citation mode content script, declared
+  for `chatgpt.com` and `claude.ai` only and top-frame only. It detects a
+  finished assistant message, builds the answer string and its map back to the
+  DOM, collects the cited URLs, asks the worker for attributions, wraps the
+  attributed phrases, renders the status badge, and re-applies a cached result
+  when a re-render drops the wrappers.
+- **`chat-sources.js`** holds that mode's pure logic: canonical cited URLs,
+  the chip-versus-prose test, the readability-style HTML-to-text pass, packing
+  several cited pages into the single document `/v1/attributions` takes,
+  mapping returned source spans back onto the page they came from, the
+  confidence threshold, and the badge wording.
+- **`text-fragments.js`** builds `#:~:text=` directives — surrogate-safe
+  bounds, bounded prefix/suffix context, `textStart,textEnd` for long targets,
+  and percent-encoded fragment grammar. Both source surfaces the extension
+  cannot script use it: Chrome's native PDF viewer (`background.js`) and a
+  cited third-party page (`chat-sources.js`).
 - **`src/sidepanel/controller.ts`** manages auth, chat history, summary policy,
   full-PDF extraction, capture/version epochs, cancellation, page-chat
   persistence, and frame-targeted highlight messages.
@@ -306,6 +344,16 @@ defensive — an unreadable or hand-edited value falls back to the default:
 | Default summary (`3 bullets` / `Detailed`) | `tokenpath-summary-preset` | `bullets` |
 | Suggest follow-up questions | `tokenpath-suggest-followups` | on |
 | Summary instructions | `tokenpath-summary-instructions` | unset |
+
+One more switch — **Cite sources in ChatGPT and Claude** — sits with them but
+is stored differently, in `chrome.storage.local` under `chatCitations` as
+`{ enabled, disabledHosts }`, because the code that honours it is a content
+script on those pages rather than this panel. It therefore arrives after the
+first render, and reads as on until it does, which is the same default the
+content script applies. The panel owns `enabled`; the badge on a chat page owns
+`disabledHosts`. Switching the panel toggle on clears `disabledHosts`, so "on"
+means on everywhere and the two surfaces can never disagree about what was
+last asked for.
 
 Summary instructions are advanced and collapsed by default. The field is
 preloaded with the editable half of the prompt currently in force, so the user
@@ -596,6 +644,7 @@ highlight can still be cleared even though the frame holds no capture ID.
 | panel → background | `highlight-pdf-source` | PDF tab/URL, canonical document, resolved `start` and `end` |
 | panel → background | `clear-pdf-source-highlight` | PDF tab/URL, and `reload` — true only for the explicit Clear button |
 | panel → background | `cancel-pdf-source-operation` | PDF tab ID whose pending navigation must be invalidated |
+| chat content script → background | `chat-citations-attribute` | the exact `answer` string offsets index, the `question` (the preceding user turn), and the cited `urls`; the reply is `{ ok, attributions, stats }` or `{ ok: false, error }` |
 
 ## Native PDF attribution
 
@@ -646,6 +695,112 @@ own selection model, keeping attribution offsets aligned with the native
 viewer used for attribution. Context around a source span disambiguates most
 repeated phrases, but completely identical repeated passages cannot be
 guaranteed.
+
+## Chat citation mode
+
+ChatGPT and Claude end a sentence with a citation chip. It names a page, not a
+passage, and it does not say which part of the sentence the page supports. Chat
+citation mode replaces that with phrase-level links, using the same attribution
+the panel uses on a captured document — the difference being that the answer
+was written by another model and the sources are pages nobody captured.
+
+Two invariants shape the implementation:
+
+1. The answer string sent to TokenPath is built by the content script, and the
+   returned offsets index that exact string. So the walk that builds it records,
+   per text node, where every emitted character came from; that map is the only
+   thing that can turn a flat `[start, end)` span back into a DOM `Range` across
+   `<p>`, `<strong>`, `<code>`, and chips.
+2. Both apps re-render freely. Every injected link can vanish at any moment, so
+   each message's resolved attributions are cached by answer text and re-applied
+   from that cache. The API is called once per distinct answer, never again for
+   a re-render.
+
+**Detecting a finished message.** A `MutationObserver` on the conversation
+container timestamps every mutation under each assistant message; a message is
+processed once its subtree has been quiet for one second **and** the app's own
+streaming signal is gone. Both, because a long tool call pauses streaming
+without finishing the turn: ChatGPT's signal is its stop button, Claude's is
+`data-is-streaming` on the message wrapper. Selectors anchor on structure and
+data attributes (`[data-message-author-role="assistant"]`,
+`[data-is-streaming]`, `[data-testid="user-message"]`) rather than on class
+names, which are generated and churn between deploys. Where Claude's selectors
+nest, only the outermost element of a message is used, so the badge and the
+processed marker have one stable home. Processed messages carry
+`data-tokenpath-processed` and `data-tokenpath-message`, so a re-render cannot
+cause reprocessing and a changed answer can be told from a redrawn one.
+
+**Extracting the answer.** A depth-bounded walk emits the prose the reader
+sees: whitespace runs collapse to one space, block boundaries and `<br>` become
+a newline, and buttons, `aria-hidden` decorations, toolbar roles, and the
+extension's own badge are skipped. Citation chips are skipped too — a chip's
+visible text is a marker ("1", "reuters.com", a source title), and including it
+would put words in the answer string that are not part of any sentence. An
+inline prose link is *kept*: dropping its words would move every later offset
+off the text on screen. The question sent with the answer is the nearest
+preceding user turn.
+
+**Reading the cited pages.** Fetching happens in the service worker: a content
+script cannot read a cited origin, and the side panel may not be open. Cited
+pages are read anonymously (`credentials: "omit"`) — no logged-in session of
+the user's is ever spent on a third-party page — with an 8-second timeout, an
+HTML-only content-type check, and a bounded streaming read. A page that fails
+(paywall, bot wall, JS-only shell, wrong content type) is dropped from the
+request and reported as a dropped source rather than retried with credentials.
+Successful reads are cached by canonical URL for the worker's lifetime, so
+several answers in one chat citing the same pages cost one read each. A cited
+URL is canonicalized first — `utm_*` and the usual tracking parameters
+stripped, fragment and userinfo dropped, non-HTTP schemes rejected — which is
+also what makes the same page cited from two answers one cache entry.
+
+**One attribution request per message.** `/v1/attributions` attributes one
+answer against *one* document, and an answer cites several pages. So the pages
+are packed into a single document, one `=== Source n: <url> ===` header line
+each, with every source's text region recorded. Each returned source span is
+rebased onto the page it landed in, because that page — not the packed
+document — is what a click opens. A span that straddles two sources, or that
+lands in a header rather than in prose, names no single page and is dropped:
+that costs one link, where guessing would move a claim's apparent grounding
+onto the wrong document. Spans below a confidence of `0.4` are dropped for the
+same reason. At most 10 sources are read, 32,000 characters kept per source,
+and the packed document stays inside the endpoint's 400,000-character ceiling.
+
+**Injecting the links.** Every attributed span is resolved against the intact
+map first, then applied in reverse document order, because wrapping splits text
+nodes and a later split must not disturb an earlier offset in the same node. A
+span crossing element boundaries becomes one `<a class="tokenpath-attr">` per
+text node, all carrying the same target: the source URL plus a `#:~:text=`
+directive aimed at the attributed passage. Fragments for a cited page are cut
+short (a 120-character target, 40-character edges) and spend prefix/suffix
+context only on a target that repeats, because the directive has to match text
+the browser lays out rather than text TokenPath extracted, and short targets
+match far more often. Links open in a new tab with `rel="noopener noreferrer"`,
+and hover text names the site and quotes the passage. Styling is a dotted
+`currentColor` underline: it has to read as "this phrase has a source" without
+competing with either app's own link colour, in light or dark, without reading
+their theme.
+
+**Status and control.** One quiet line under each processed message says what
+happened — `TokenPath: 7/9 sources · 23 phrases`, `TokenPath: 3/3 sources · no
+linked phrases`, `TokenPath: couldn't read any of 4 cited pages`, or a wording
+for the failure (`out of TokenPath tokens`, `connect TokenPath in the side
+panel`, `rate limited — retry shortly`). A message with no web citations, or
+whose sources all failed, is left exactly as the app rendered it and says why.
+**Retry** appears whenever there is nothing linked, and **Off** turns the
+feature off for that site: the injected links, the badge, and the processed
+markers are all removed, the page is left as the app rendered it, and the host
+is added to `disabledHosts`. A failure is deliberately not cached, so Retry can
+reach a working backend; a success is.
+
+Out of scope here, and tracked separately: uploaded PDFs and files (the DOM
+exposes only a filename chip; the bytes live behind each app's authenticated
+API), a hover popover showing the source passage inline, other hosts, marking
+answer spans that came back *unattributed*, and distinguishing "cited but
+unsupported" — attribution runs against the live page, which is the more useful
+thing to check but does mean a claim can come back unsupported even though the
+app cited a source. Chat citation mode is a personal/dev-mode feature: it rides
+the existing `<all_urls>` host permission, which would need revisiting before
+any store release that leans on it.
 
 ## Lifecycle and non-goals
 

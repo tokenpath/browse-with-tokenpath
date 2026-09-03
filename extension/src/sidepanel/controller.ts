@@ -103,6 +103,14 @@ export interface PanelMessage {
 /** Persisted panel preferences. Every read is defensive. */
 export interface PanelSettings {
   autoSummarize: boolean;
+  /**
+   * Chat citation mode on chatgpt.com and claude.ai. Unlike every other
+   * preference here this one lives in chrome.storage.local, because the
+   * content script that reads it runs on those pages rather than in this
+   * panel. It therefore arrives after the first render; `true` until then,
+   * which is the same default chat-citations.js applies.
+   */
+  chatCitations: boolean;
   summaryPreset: SummaryPreset;
   suggestFollowUps: boolean;
   /** null until the user edits the instructions; then it replaces the preset. */
@@ -171,6 +179,10 @@ const AUTO_SUMMARIZE_KEY = "tokenpath-auto-summarize";
 const SUMMARY_PRESET_KEY = "tokenpath-summary-preset";
 const SUGGEST_FOLLOWUPS_KEY = "tokenpath-suggest-followups";
 const SUMMARY_INSTRUCTIONS_KEY = "tokenpath-summary-instructions";
+// chrome.storage.local, shared with chat-citations.js. The stored value is
+// `{ enabled, disabledHosts }`; the panel owns `enabled`, and the badge on a
+// chat page owns the per-host list.
+const CHAT_CITATIONS_KEY = "chatCitations";
 const MAX_GENERATE_INPUT_CHARS = 420_000;
 const MAX_GENERATE_MESSAGES = 50;
 // TokenPath caps `max_output_tokens` at 2048 and bills generation from the
@@ -247,6 +259,7 @@ function readPanelSettings(): PanelSettings {
   );
   return {
     autoSummarize: readBooleanPreference(AUTO_SUMMARIZE_KEY, true),
+    chatCitations: true,
     summaryPreset: preset === "detailed" ? "detailed" : "bullets",
     suggestFollowUps: readBooleanPreference(SUGGEST_FOLLOWUPS_KEY, true),
     customSummaryPrompt: custom.trim() ? custom : null,
@@ -408,6 +421,7 @@ export class PanelController {
 
   async init() {
     this.watchTab();
+    void this.initChatCitations();
     const authReady = this.initAuth();
     const [tab] = await chrome.tabs.query({
       active: true,
@@ -782,6 +796,34 @@ export class PanelController {
     // Deliberately not retroactive: the toolbar click that opened this page
     // was already answered by waiting, and turning the switch on should
     // change the next page rather than spend on this one behind the user.
+  };
+
+  /**
+   * Read the shared chat-citation preference. A failure leaves the switch
+   * reading on, which is what the content script does too — the panel must
+   * not invent an "off" the chat pages are not honouring.
+   */
+  private async initChatCitations() {
+    try {
+      const stored = await chrome.storage.local.get(CHAT_CITATIONS_KEY);
+      const value = stored?.[CHAT_CITATIONS_KEY];
+      this.updateSettings({
+        chatCitations: (value as { enabled?: boolean } | undefined)?.enabled !==
+          false,
+      });
+    } catch {
+      // Keep the optimistic default.
+    }
+  }
+
+  setChatCitations = (chatCitations: boolean) => {
+    this.updateSettings({ chatCitations });
+    // On means on everywhere: switching it back on also clears any single
+    // site turned off from that site's own badge, so the switch and the page
+    // can never disagree about what the user last asked for.
+    void chrome.storage.local.set({
+      [CHAT_CITATIONS_KEY]: { enabled: chatCitations, disabledHosts: [] },
+    });
   };
 
   setSummaryPreset = (summaryPreset: SummaryPreset) => {

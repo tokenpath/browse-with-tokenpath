@@ -173,6 +173,27 @@ export function SettingsView({
       <div className="setting">
         <div className="setting-row">
           <div className="setting-copy">
+            <div className="setting-name" id="setting-chat-citations-label">
+              Cite sources in ChatGPT and Claude
+            </div>
+            <p className="setting-desc">
+              When an answer on chatgpt.com or claude.ai cites the web, link
+              its phrases to the passage each one came from. Any single site
+              you switch off from the answer itself comes back on with this.
+            </p>
+          </div>
+          <SettingSwitch
+            checked={settings.chatCitations}
+            id="setting-chat-citations"
+            label="Cite sources in ChatGPT and Claude"
+            onChange={controller.setChatCitations}
+          />
+        </div>
+      </div>
+
+      <div className="setting">
+        <div className="setting-row">
+          <div className="setting-copy">
             <div className="setting-name">Suggest follow-up questions</div>
             <p className="setting-desc">
               Show two suggested questions under each answer.

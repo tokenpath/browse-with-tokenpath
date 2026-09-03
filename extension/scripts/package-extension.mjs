@@ -29,6 +29,9 @@ const ARCHIVE_TIMESTAMP = new Date("2020-01-01T00:00:00Z");
 
 const runtimeFiles = [
   "background.js",
+  "chat-citations.css",
+  "chat-citations.js",
+  "chat-sources.js",
   "content.css",
   "content.js",
   "icons/icon16.png",
@@ -40,6 +43,7 @@ const runtimeFiles = [
   "sidepanel/panel.js",
   "sidepanel/panel-logic.js",
   "sidepanel/tokenpath.js",
+  "text-fragments.js",
 ];
 
 // Files that ship in the package but live outside the extension directory,

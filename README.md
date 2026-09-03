@@ -17,6 +17,13 @@ This repository holds the extension alone — there is no server in it and no
 self-hosted mode. The account is free to create and the panel walks through it
 on first run.
 
+The same attribution also runs on answers this extension did not generate. On
+`chatgpt.com` and `claude.ai`, **chat citation mode** turns the phrases of a
+finished, web-citing assistant message into links that open each cited page at
+the passage supporting that phrase — instead of a chip at the end of a sentence
+that names a page and leaves you to find the sentence in it. See
+**[Chat citation mode](#chat-citation-mode)**.
+
 "Browse with TokenPath" is the product name; **Chat with TokenPath** is the one
 context-menu action, and stays worded that way on purpose — it names what the
 click does.
@@ -123,10 +130,58 @@ turn only when you ask: the panel shows what it captured and waits.
   Arrow keys move through the list with roving focus, Enter highlights that
   phrase's source, Escape closes the list and returns focus to the toggle.
 
+## Chat citation mode
+
+ChatGPT and Claude cite with a chip at the end of a sentence. It names a page,
+not a passage — so it is rarely clicked, and when it is, you land at the top of
+a long article and have to find the sentence yourself. Chat citation mode
+replaces that with links on the words themselves.
+
+Nothing to turn on and nothing to click. On `chatgpt.com` and `claude.ai`, when
+an assistant message finishes and cites the web, the extension reads the cited
+pages, asks TokenPath which phrases of the answer each page supports, and
+underlines those phrases. Clicking one opens that page in a new tab, scrolled to
+the supporting passage; hovering names the site and quotes the passage.
+
+One quiet line under the answer says what happened:
+
+```text
+TokenPath: 7/9 sources · 23 phrases
+TokenPath: 3/3 sources · no linked phrases
+TokenPath: couldn't read any of 4 cited pages
+TokenPath: rate limited — retry shortly
+```
+
+**Retry** appears whenever nothing was linked. **Off** turns the feature off for
+that site and removes everything it added, leaving the answer exactly as the app
+rendered it; **Cite sources in ChatGPT and Claude** in Settings turns it off
+everywhere, and turning it back on there also clears any single site you had
+switched off. An answer with no web citations is never touched.
+
+What it costs and what it reads:
+
+- One TokenPath attribution request per finished answer, billed like any other.
+  A re-render never repeats it; **Retry** and a genuinely different answer do.
+- Up to ten cited pages per answer, read **without your cookies** — a cited page
+  never sees a logged-in session of yours. A page behind a paywall, a bot wall,
+  or client-side rendering simply fails and is reported as a dropped source.
+- Cited pages are cached while the extension's worker is warm, so several
+  answers in one chat citing the same pages are read once each.
+
+Known limits. Attribution runs against the **live** page, not against the
+snippet the model saw, which is the more useful thing to check but does mean a
+claim can come back unsupported even though the app cited a source; v1 stays
+silent about that rather than guessing. Uploaded PDFs and files are not covered
+— the page only exposes a filename, and the bytes live behind each app's own
+authenticated API. A `#:~:text=` link lands on the passage only where the
+browser can match it in the page as rendered. Phrases below a confidence
+threshold, and source spans that cannot be tied to exactly one cited page, are
+left unlinked on purpose: a link to the wrong passage is worse than no link.
+
 ## Settings
 
 The gear in the header opens Settings in place of the conversation; the back
-arrow or Escape returns. It holds four preferences, stored locally, and a
+arrow or Escape returns. It holds five preferences, stored locally, and a
 **Plan** row:
 
 - **Summarize new pages automatically** (on). Off, a toolbar click still opens
@@ -134,6 +189,9 @@ arrow or Escape returns. It holds four preferences, stored locally, and a
 - **Default summary**: **3 bullets** or **Detailed**. Applies to automatic
   summaries and to the **Summarize** action.
 - **Suggest follow-up questions** (on). Off hides the suggestion row entirely.
+- **Cite sources in ChatGPT and Claude** (on). Chat citation mode, above. This
+  one is shared with those pages rather than kept in the panel, so switching it
+  on also clears any single site you had turned off from the answer itself.
 - **Summary instructions** (advanced, collapsed). The box is preloaded with the
   instructions currently in force, so you edit the real thing. Once you change
   them a **Customized** badge appears, **Reset** puts the preset back in one
@@ -279,7 +337,11 @@ websites” install warning. The matching host permission additionally keeps
 `tab.url` visible to `tabs.query` and `tabs.onUpdated` outside a user gesture —
 per-page chat restore, navigation invalidation, and stale-seed checks all read
 it — and covers the side panel's credentialed full-PDF download, which
-`activeTab` does not.
+`activeTab` does not. Chat citation mode also relies on it, to read the pages a
+chat answer cites from the service worker; those reads deliberately carry no
+cookies. That reliance is the one part of this extension that would need
+narrowing before a store release built around it — the mode is a personal /
+dev-mode feature today.
 
 Where that data may be sent is constrained separately, in code:
 `sidepanel/tokenpath.js` accepts only the exact origins `https://api.tokenpath.ai`,
@@ -331,6 +393,10 @@ extension/
 ├── background.js              # frame/page/PDF capture and PDF navigation
 ├── content.js                 # extraction, node map, remap, highlight
 ├── content.css                # source attribution highlight (light + dark)
+├── chat-citations.js          # ChatGPT/Claude answer detection and links
+├── chat-citations.css         # attributed-phrase underline and status badge
+├── chat-sources.js            # cited-page text, packing, span mapping
+├── text-fragments.js          # shared #:~:text= directive builder
 ├── package.json               # side-panel build and complete validation
 ├── vite.config.ts             # local MV3-compatible JS/CSS bundle
 ├── src/sidepanel/
