@@ -6,10 +6,11 @@ import { defineConfig } from "vite";
 
 const extensionRoot = path.dirname(fileURLToPath(import.meta.url));
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   base: "./",
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
+    __TOKENPATH_DEBUG_CASES_ENABLED__: JSON.stringify(mode === "debug"),
   },
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -39,4 +40,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

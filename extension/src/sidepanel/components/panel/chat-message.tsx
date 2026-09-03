@@ -4,6 +4,7 @@ import { AnswerResponse } from "@/components/panel/answer-response";
 import { Spinner } from "@/components/ui/spinner";
 import type { PanelController, PanelMessage } from "@/controller";
 import type { AnswerHighlightRegistry } from "@/lib/answer-highlights";
+import type { SavedAttributionCase } from "@/saved-attribution-cases";
 import { cn } from "@/lib/utils";
 
 export const ChatMessage = memo(function ChatMessage({
@@ -11,11 +12,15 @@ export const ChatMessage = memo(function ChatMessage({
   controller,
   highlights,
   message,
+  savedCase,
+  savedCasesEnabled,
 }: {
   animateClickHint: boolean;
   controller: PanelController;
   highlights: AnswerHighlightRegistry;
   message: PanelMessage;
+  savedCase?: SavedAttributionCase;
+  savedCasesEnabled: boolean;
 }) {
   const isNote = message.kind === "note";
   const isError = message.kind === "error";
@@ -39,6 +44,8 @@ export const ChatMessage = memo(function ChatMessage({
             controller={controller}
             highlights={highlights}
             message={message}
+            savedCase={savedCase}
+            savedCasesEnabled={savedCasesEnabled}
           />
         ) : (
           <div className="whitespace-pre-wrap break-words">

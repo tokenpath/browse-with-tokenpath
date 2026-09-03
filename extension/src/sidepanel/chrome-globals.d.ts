@@ -144,5 +144,7 @@ interface TokenPathApi {
 declare const TokenPathPanelLogic: TokenPathPanelLogicApi;
 declare const TokenPath: TokenPathApi;
 declare function formatTokens(value: number | null): string;
+/** Enabled only by `npm run build:debug`; regular and store builds are false. */
+declare const __TOKENPATH_DEBUG_CASES_ENABLED__: boolean;
 
 declare module "*.css";

@@ -1,4 +1,6 @@
 import {
+  BookmarkIcon,
+  CheckIcon,
   CircleAlertIcon,
   CircleDashedIcon,
   ExternalLinkIcon,
@@ -22,6 +24,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import type { PanelController, PanelMessage } from "@/controller";
 import type { AnswerHighlightRegistry } from "@/lib/answer-highlights";
+import type { SavedAttributionCase } from "@/saved-attribution-cases";
 import { cn } from "@/lib/utils";
 
 type AnswerComponents = NonNullable<
@@ -90,11 +93,15 @@ export function AnswerResponse({
   controller,
   highlights,
   message,
+  savedCase,
+  savedCasesEnabled,
 }: {
   animateClickHint: boolean;
   controller: PanelController;
   highlights: AnswerHighlightRegistry;
   message: PanelMessage;
+  savedCase?: SavedAttributionCase;
+  savedCasesEnabled: boolean;
 }) {
   const answerRoot = useRef<HTMLDivElement>(null);
   const mapper = useRef<AnswerDomMapper | null>(null);
@@ -106,6 +113,8 @@ export function AnswerResponse({
     useState<TokenPathAttributionSpan | null>(null);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [activePhraseIndex, setActivePhraseIndex] = useState(0);
+  const [noteEditorOpen, setNoteEditorOpen] = useState(false);
+  const [noteDraft, setNoteDraft] = useState(savedCase?.note ?? "");
   const phrases = useMemo(() => {
     const attribution = message.attribution;
     if (
@@ -118,6 +127,16 @@ export function AnswerResponse({
     }
     return attribution.spans;
   }, [message.answerStatus, message.attribution, message.text]);
+  const canSaveCase = Boolean(
+    message.text &&
+      message.attribution &&
+      message.attribution.status !== "loading" &&
+      !message.incomplete
+  );
+
+  useEffect(() => {
+    setNoteDraft(savedCase?.note ?? "");
+  }, [savedCase?.id, savedCase?.note]);
 
   useEffect(() => {
     const root = answerRoot.current;
@@ -383,6 +402,82 @@ export function AnswerResponse({
               </span>
             ) : null}
           </span>
+        </div>
+      )}
+
+      {savedCasesEnabled && canSaveCase && (
+        <div className="answer-case-area">
+          <button
+            aria-expanded={noteEditorOpen}
+            className={cn("answer-save-case", savedCase && "is-saved")}
+            onClick={async () => {
+              if (savedCase) {
+                setNoteEditorOpen((open) => !open);
+                return;
+              }
+              const created = await controller.saveAttributionCase(message.id);
+              if (!created) return;
+              setNoteDraft(created.note);
+              setNoteEditorOpen(true);
+            }}
+            title={
+              savedCase
+                ? "Edit this saved case's note"
+                : "Save the attribution request and response"
+            }
+            type="button"
+          >
+            {savedCase ? (
+              <CheckIcon aria-hidden="true" />
+            ) : (
+              <BookmarkIcon aria-hidden="true" />
+            )}
+            <span>{savedCase ? "Case saved" : "Save case"}</span>
+          </button>
+          {noteEditorOpen && savedCase && (
+            <div className="answer-case-note">
+              <label htmlFor={`answer-case-note-${message.id}`}>
+                Optional note
+              </label>
+              <textarea
+                autoFocus
+                id={`answer-case-note-${message.id}`}
+                maxLength={4_000}
+                onChange={(event) => setNoteDraft(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") return;
+                  event.preventDefault();
+                  setNoteDraft(savedCase.note);
+                  setNoteEditorOpen(false);
+                }}
+                placeholder="What looked wrong or could be improved?"
+                rows={3}
+                value={noteDraft}
+              />
+              <div className="answer-case-note-actions">
+                <span>{noteDraft.length.toLocaleString()}/4,000</span>
+                <button
+                  onClick={async () => {
+                    if (noteDraft === savedCase.note) {
+                      setNoteEditorOpen(false);
+                      return;
+                    }
+                    if (
+                      await controller.updateSavedCaseNote(
+                        savedCase.id,
+                        noteDraft
+                      )
+                    ) {
+                      setNoteEditorOpen(false);
+                    }
+                  }}
+                  type="button"
+                >
+                  {noteDraft === savedCase.note ? "Done" : "Save note"}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

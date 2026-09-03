@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "build": "vite build",
+    "build:debug": "vite build --mode debug",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run check:scripts && npm run build",
     "check:scripts": "tsc -p tsconfig.scripts.json",
@@ -13,7 +14,7 @@
     "version:set": "node scripts/set-version.mjs",
     "setup:test": "playwright install chromium && bash test/setup-libs.sh",
     "test:unit": "node --test test/*.test.cjs",
-    "test:e2e": "node test/e2e.mjs",
+    "test:e2e": "sh -c 'npm run build:debug && node test/e2e.mjs; test_status=$?; npm run build; build_status=$?; [ $test_status -eq 0 ] && exit $build_status; exit $test_status'",
     "test": "npm run check && npm run test:unit && npm run test:e2e"
   },
   "dependencies": {

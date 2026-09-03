@@ -13,6 +13,7 @@ import {
   type FollowUpChip,
 } from "@/components/panel/follow-up-chips";
 import { PanelHeader } from "@/components/panel/panel-header";
+import { SavedCasesView } from "@/components/panel/saved-cases-view";
 import { SettingsView } from "@/components/panel/settings-view";
 import { SourceCard } from "@/components/panel/source-card";
 import type { AnswerStatus, PanelController, PanelMessage } from "@/controller";
@@ -76,6 +77,7 @@ export function App({
   const highlights = useAnswerHighlights();
   const keyInputRef = useRef<HTMLInputElement>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
+  const savedCasesButtonRef = useRef<HTMLButtonElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [authResolved, setAuthResolved] = useState(!initialized);
   const [dismissedNotice, setDismissedNotice] = useState<string | null>(null);
@@ -137,6 +139,7 @@ export function App({
     snapshot.hasContext &&
     !snapshot.busy &&
     !snapshot.settingsOpen &&
+    !snapshot.savedCasesOpen &&
     (answeredThisChat || !snapshot.settings.autoSummarize)
   ) {
     if (fixedChipKind === "summarize") {
@@ -253,6 +256,15 @@ export function App({
     if (previous && !snapshot.settingsOpen) settingsButtonRef.current?.focus();
   }, [snapshot.settingsOpen]);
 
+  const wasSavedCasesOpen = useRef(snapshot.savedCasesOpen);
+  useEffect(() => {
+    const previous = wasSavedCasesOpen.current;
+    wasSavedCasesOpen.current = snapshot.savedCasesOpen;
+    if (previous && !snapshot.savedCasesOpen) {
+      savedCasesButtonRef.current?.focus();
+    }
+  }, [snapshot.savedCasesOpen]);
+
   // A new turn (or note) belongs to the conversation, so it pulls the panel
   // back out of Settings rather than answering behind it.
   const messageCount = snapshot.messages.length;
@@ -260,8 +272,10 @@ export function App({
   useEffect(() => {
     const grew = messageCount > previousMessageCount.current;
     previousMessageCount.current = messageCount;
-    if (grew && snapshot.settingsOpen) controller.closeSettings();
-  }, [controller, messageCount, snapshot.settingsOpen]);
+    if (!grew) return;
+    if (snapshot.settingsOpen) controller.closeSettings();
+    if (snapshot.savedCasesOpen) controller.closeSavedCases();
+  }, [controller, messageCount, snapshot.savedCasesOpen, snapshot.settingsOpen]);
 
   // Connecting hides the auth section under the just-clicked button, which
   // would otherwise drop focus to <body>.
@@ -277,6 +291,7 @@ export function App({
     <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
       <PanelHeader
         controller={controller}
+        savedCasesButtonRef={savedCasesButtonRef}
         settingsButtonRef={settingsButtonRef}
         snapshot={snapshot}
       />
@@ -321,10 +336,14 @@ export function App({
         <SettingsView controller={controller} snapshot={snapshot} />
       )}
 
+      {snapshot.savedCasesOpen && (
+        <SavedCasesView controller={controller} snapshot={snapshot} />
+      )}
+
       <Conversation
         aria-label="Conversation"
         className="min-h-0"
-        hidden={snapshot.settingsOpen}
+        hidden={snapshot.settingsOpen || snapshot.savedCasesOpen}
         id="messages"
       >
         <ConversationContent className="gap-5 px-3.5 py-4">
@@ -338,6 +357,10 @@ export function App({
               highlights={highlights}
               key={message.id}
               message={message}
+              savedCase={snapshot.savedCases.find(
+                (savedCase) => savedCase.id === message.savedCaseId
+              )}
+              savedCasesEnabled={snapshot.savedCasesEnabled}
             />
           ))}
           {chatIsEmpty &&

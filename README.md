@@ -123,6 +123,36 @@ turn only when you ask: the panel shows what it captured and waits.
   Arrow keys move through the list with roving focus, Enter highlights that
   phrase's source, Escape closes the list and returns focus to the toggle.
 
+## Developer-only saved debugging cases
+
+This feature is excluded from the normal customer build. To enable it in a
+local unpacked extension, build with:
+
+```sh
+cd extension
+npm run build:debug
+```
+
+Then reload the unpacked extension from `chrome://extensions`. Running
+`npm run build`, `npm run check`, or `npm run package:store` replaces that
+bundle with the customer-safe build, where the save controls are hidden and
+the saved-case store is never opened.
+
+After source mapping finishes, **Save case** captures that answer as a durable
+local debugging record in one click. Its optional note can be added immediately
+or edited later from the bookmark button in the header. Each record contains
+the source URL and label, save/update timestamps, the exact
+`POST /v1/attributions` body (`document`, `question`, and `answer`), and either
+the returned UTF-16 spans or the attribution failure. API credentials are never
+included.
+
+The saved-cases view lists successful and failed cases, supports individual
+deletion, and exports every record as one pretty-printed, versioned JSON file
+for sharing with the team. The export includes the full captured source text,
+so the panel calls that out before download. Cases live in a dedicated
+IndexedDB store and are not coupled to the per-page chat cache: clearing a chat
+or disconnecting does not erase evidence the user explicitly saved.
+
 ## Settings
 
 The gear in the header opens Settings in place of the conversation; the back
