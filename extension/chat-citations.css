@@ -1,27 +1,54 @@
 /* TokenPath — chat citation mode.
    Injected into chatgpt.com and claude.ai. Both apps style their own links,
-   so an attributed phrase is marked with an underline rather than a colour:
+   so an attributed phrase is marked with a purple underline rather than a
+   text-colour change:
    it has to read as "this phrase has a source" without competing with the
-   app's own links or with the surrounding text. `currentColor` keeps that
-   true in either app, in light and dark, without reading their theme. */
+   app's own links or with the surrounding text. */
 a.tokenpath-attr,
 a.tokenpath-attr:visited {
+  position: relative;
   color: inherit;
   text-decoration: underline;
   text-decoration-style: dotted;
-  text-decoration-thickness: 1px;
-  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
-  text-underline-offset: 2px;
+  text-decoration-thickness: 1.5px;
+  text-decoration-color: #8b5cf6;
+  text-underline-offset: 3px;
   cursor: pointer;
 }
 
 a.tokenpath-attr:hover,
 a.tokenpath-attr:focus-visible {
-  text-decoration-style: solid;
+  text-decoration-style: dotted;
   text-decoration-thickness: 2px;
-  text-decoration-color: currentColor;
-  background-color: color-mix(in srgb, currentColor 8%, transparent);
+  text-decoration-color: #7c3aed;
+  background-color: color-mix(in srgb, #8b5cf6 10%, transparent);
   border-radius: 2px;
+}
+
+/* Immediate evidence preview. The copy names this as the passage TokenPath
+   matched from the fetched page; ChatGPT and Claude do not expose the private
+   retrieval context that originally produced their answer. */
+a.tokenpath-attr[data-tokenpath-source-preview]:hover::after,
+a.tokenpath-attr[data-tokenpath-source-preview]:focus-visible::after {
+  content: attr(data-tokenpath-source-preview);
+  position: absolute;
+  z-index: 2147483647;
+  inset-inline-start: 0;
+  inset-block-end: calc(100% + 8px);
+  box-sizing: border-box;
+  inline-size: min(360px, calc(100vw - 32px));
+  padding: 8px 10px;
+  border: 1px solid #a78bfa;
+  border-radius: 7px;
+  background: #211936;
+  box-shadow: 0 8px 24px rgb(24 16 45 / 24%);
+  color: #f5f3ff;
+  font: 500 12px/1.45 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0;
+  text-align: start;
+  text-decoration: none;
+  white-space: normal;
+  pointer-events: none;
 }
 
 /* The status line under a processed message: what was read, what was linked,

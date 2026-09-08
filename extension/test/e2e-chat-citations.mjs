@@ -190,6 +190,9 @@ async function linkReport(page) {
       texts: anchors.map((anchor) => anchor.textContent),
       hrefs: anchors.map((anchor) => anchor.getAttribute("href")),
       titles: anchors.map((anchor) => anchor.getAttribute("title")),
+      previews: anchors.map((anchor) =>
+        anchor.getAttribute("data-tokenpath-source-preview")
+      ),
       targets: anchors.map((anchor) => anchor.getAttribute("target")),
       rels: anchors.map((anchor) => anchor.getAttribute("rel")),
       badge:
@@ -300,6 +303,11 @@ async function chatgptSuite(context) {
     linked.titles[0].startsWith("reuters.com — “"),
     "hover text names the site and the passage",
     linked.titles[0]
+  );
+  check(
+    linked.previews[0].startsWith("Matched source: reuters.com — “"),
+    "the visible preview labels the matched source passage honestly",
+    linked.previews[0]
   );
   check(
     linked.answerText.includes("The rate rose to 18% in June"),

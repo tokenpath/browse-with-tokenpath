@@ -379,9 +379,19 @@
     anchor.href = attribution.source.link;
     anchor.target = "_blank";
     anchor.rel = "noopener noreferrer";
-    anchor.title = TokenPathChatSources.hoverTitle(
+    const sourcePreview = TokenPathChatSources.hoverTitle(
       attribution.source.url,
       attribution.source.text
+    );
+    anchor.title = sourcePreview;
+    // A native title tooltip is slow to appear and cannot be styled. Keep it
+    // as a browser/accessibility fallback, and expose the same bounded text to
+    // the injected stylesheet for an immediate evidence preview. "Matched
+    // source" is deliberate: this is the passage TokenPath found in the
+    // fetched page, not a claim about ChatGPT's private retrieval context.
+    anchor.setAttribute(
+      "data-tokenpath-source-preview",
+      `Matched source: ${sourcePreview}`
     );
     anchor.setAttribute("data-tokenpath-confidence", String(
       Math.round(attribution.source.confidence * 100)
