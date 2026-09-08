@@ -8,6 +8,13 @@ import {
   sameDocumentUrl,
   writePageChat,
 } from "@/chat-cache";
+import {
+  buildSavedAttributionCasesExport,
+  deleteSavedAttributionCase,
+  readSavedAttributionCases,
+  writeSavedAttributionCase,
+  type SavedAttributionCase,
+} from "@/saved-attribution-cases";
 
 export type ThemePreference = "system" | "light" | "dark";
 export type ResolvedTheme = "light" | "dark";
@@ -98,6 +105,8 @@ export interface PanelMessage {
   suggestions?: string[];
   /** Set on an answer produced by the summary pathway; drives the ladder. */
   summaryDepth?: SummaryDepth;
+  /** Links a chat answer to its durable, user-saved debugging record. */
+  savedCaseId?: string;
 }
 
 /** Persisted panel preferences. Every read is defensive. */
@@ -137,6 +146,9 @@ export interface PanelSnapshot {
   messages: PanelMessage[];
   notice: string | null;
   resolvedTheme: ResolvedTheme;
+  savedCases: SavedAttributionCase[];
+  savedCasesEnabled: boolean;
+  savedCasesOpen: boolean;
   settings: PanelSettings;
   settingsOpen: boolean;
   sourceType: ContextSourceType;
@@ -377,6 +389,7 @@ export class PanelController {
     string,
     TokenPathGroundedSuggestion[]
   >();
+  private savingCaseMessageIds = new Set<string>();
 
   constructor() {
     const themePreference = readThemePreference();
@@ -396,6 +409,9 @@ export class PanelController {
       messages: [],
       notice: null,
       resolvedTheme,
+      savedCases: [],
+      savedCasesEnabled: __TOKENPATH_DEBUG_CASES_ENABLED__,
+      savedCasesOpen: false,
       settings: readPanelSettings(),
       settingsOpen: false,
       sourceType: "page",
@@ -423,6 +439,9 @@ export class PanelController {
     this.watchTab();
     void this.initChatCitations();
     const authReady = this.initAuth();
+    const savedCasesReady = __TOKENPATH_DEBUG_CASES_ENABLED__
+      ? this.loadSavedCases()
+      : Promise.resolve();
     const [tab] = await chrome.tabs.query({
       active: true,
       currentWindow: true,
@@ -479,7 +498,7 @@ export class PanelController {
       if (!restored) this.prepareUncapturedPage();
     }
 
-    await authReady;
+    await Promise.all([authReady, savedCasesReady]);
     // A seed that arrived before auth finished has a context but nothing it is
     // allowed to spend yet; this is where a toolbar summary catches up.
     this.maybeRunAutoSummary();
@@ -779,12 +798,185 @@ export class PanelController {
     this.update({ themePreference, resolvedTheme });
   };
 
-  openSettings = () => this.update({ settingsOpen: true });
+  openSettings = () =>
+    this.update({ savedCasesOpen: false, settingsOpen: true });
 
   closeSettings = () => this.update({ settingsOpen: false });
 
   toggleSettings = () =>
-    this.update({ settingsOpen: !this.snapshot.settingsOpen });
+    this.update({
+      savedCasesOpen: false,
+      settingsOpen: !this.snapshot.settingsOpen,
+    });
+
+  openSavedCases = () =>
+    this.update({ savedCasesOpen: true, settingsOpen: false });
+
+  closeSavedCases = () => this.update({ savedCasesOpen: false });
+
+  toggleSavedCases = () =>
+    this.update({
+      savedCasesOpen:
+        this.snapshot.savedCasesEnabled && !this.snapshot.savedCasesOpen,
+      settingsOpen: false,
+    });
+
+  saveAttributionCase = async (messageId: string) => {
+    if (!this.snapshot.savedCasesEnabled) return null;
+    const message = this.snapshot.messages.find(
+      (candidate) => candidate.id === messageId
+    );
+    const existing = message?.savedCaseId
+      ? this.snapshot.savedCases.find(
+          (savedCase) => savedCase.id === message.savedCaseId
+        )
+      : null;
+    if (existing) return existing;
+    if (
+      !message?.attribution ||
+      !message.text ||
+      message.attribution.status === "loading"
+    ) {
+      this.showToast("Wait for source mapping to finish before saving.");
+      return null;
+    }
+    if (this.savingCaseMessageIds.has(messageId)) return null;
+    this.savingCaseMessageIds.add(messageId);
+
+    const timestamp = new Date().toISOString();
+    const id = globalThis.crypto?.randomUUID?.() ??
+      `case-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const savedCase: SavedAttributionCase = {
+      schemaVersion: 1,
+      id,
+      savedAt: timestamp,
+      updatedAt: timestamp,
+      note: "",
+      source: {
+        url: message.source?.url ?? this.sourceUrl,
+        label: this.snapshot.contextLabel,
+        sourceType: message.source?.sourceType ?? this.sourceType,
+      },
+      attributionRequest: {
+        method: "POST",
+        path: "/v1/attributions",
+        body: {
+          document: message.attribution.document,
+          question: message.attribution.question,
+          answer: message.text,
+        },
+      },
+      attributionResponse:
+        message.attribution.status === "ready"
+          ? {
+              status: "ready",
+              offsetEncoding: "utf-16",
+              spans: message.attribution.spans || [],
+            }
+          : {
+              status: "error",
+              error:
+                message.attribution.error || "Source attribution failed.",
+            },
+    };
+
+    try {
+      await writeSavedAttributionCase(savedCase);
+      this.update({
+        savedCases: [savedCase, ...this.snapshot.savedCases],
+      });
+      this.updateMessage(messageId, { savedCaseId: id });
+      void this.persistCurrentPageChat();
+      this.showToast("Debug case saved.");
+      return savedCase;
+    } catch {
+      this.showToast("Couldn't save this debug case.");
+      return null;
+    } finally {
+      this.savingCaseMessageIds.delete(messageId);
+    }
+  };
+
+  updateSavedCaseNote = async (id: string, note: string) => {
+    const current = this.snapshot.savedCases.find(
+      (savedCase) => savedCase.id === id
+    );
+    if (!current) return false;
+    const updated: SavedAttributionCase = {
+      ...current,
+      note: note.slice(0, 4_000),
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      await writeSavedAttributionCase(updated);
+      this.update({
+        savedCases: this.snapshot.savedCases.map((savedCase) =>
+          savedCase.id === id ? updated : savedCase
+        ),
+      });
+      this.showToast("Case note saved.");
+      return true;
+    } catch {
+      this.showToast("Couldn't save the case note.");
+      return false;
+    }
+  };
+
+  deleteSavedCase = async (id: string) => {
+    try {
+      await deleteSavedAttributionCase(id);
+      this.update({
+        messages: this.snapshot.messages.map((message) =>
+          message.savedCaseId === id
+            ? { ...message, savedCaseId: undefined }
+            : message
+        ),
+        savedCases: this.snapshot.savedCases.filter(
+          (savedCase) => savedCase.id !== id
+        ),
+      });
+      void this.persistCurrentPageChat();
+      this.showToast("Debug case deleted.");
+      return true;
+    } catch {
+      this.showToast("Couldn't delete this debug case.");
+      return false;
+    }
+  };
+
+  exportSavedCases = () => {
+    if (this.snapshot.savedCases.length === 0) return false;
+    try {
+      const payload = buildSavedAttributionCasesExport(
+        this.snapshot.savedCases
+      );
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `tokenpath-debug-cases-${payload.exportedAt.slice(0, 10)}.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      this.showToast(
+        `Exported ${payload.cases.length} debug ${payload.cases.length === 1 ? "case" : "cases"}.`
+      );
+      return true;
+    } catch {
+      this.showToast("Couldn't export saved debug cases.");
+      return false;
+    }
+  };
+
+  private async loadSavedCases() {
+    try {
+      this.update({ savedCases: await readSavedAttributionCases() });
+    } catch {
+      // Chat remains usable if IndexedDB is unavailable. The first attempted
+      // save reports the storage failure in context.
+    }
+  }
 
   private updateSettings(patch: Partial<PanelSettings>) {
     this.update({ settings: { ...this.snapshot.settings, ...patch } });

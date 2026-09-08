@@ -813,6 +813,31 @@
   white-space: nowrap;
 }
 
+.header-saved-cases {
+  position: relative;
+}
+
+.header-saved-count {
+  position: absolute;
+  top: -0.28rem;
+  right: -0.34rem;
+  display: flex;
+  min-width: 0.92rem;
+  height: 0.92rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--background);
+  border-radius: 999px;
+  background: var(--tp-accent);
+  padding-inline: 0.18rem;
+  color: #ffffff;
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .selectable-answer [data-answer-content] {
   cursor: text;
   user-select: text;
@@ -1089,6 +1114,359 @@
   color: var(--muted-foreground);
   font-size: 0.7rem;
   line-height: 1rem;
+}
+
+/*
+  A captured result reads like a small lab tag, not another source control.
+  Saving happens on the first click; the note drawer is explicitly optional.
+*/
+.answer-case-area {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+}
+
+.answer-save-case {
+  display: inline-flex;
+  min-height: 1.5rem;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid transparent;
+  border-radius: 0.3rem;
+  padding: 0.12rem 0.38rem;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1rem;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.answer-save-case > svg {
+  width: 0.78rem;
+  height: 0.78rem;
+}
+
+.answer-save-case:hover,
+.answer-save-case[aria-expanded="true"] {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: var(--foreground);
+}
+
+.answer-save-case.is-saved {
+  border-color: color-mix(in srgb, var(--tp-accent) 36%, transparent);
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.answer-case-note {
+  width: min(100%, 24rem);
+  border-left: 2px solid var(--tp-accent);
+  border-radius: 0.25rem;
+  background: color-mix(in srgb, var(--accent) 58%, var(--surface));
+  padding: 0.48rem 0.55rem 0.5rem;
+}
+
+.answer-case-note > label {
+  display: block;
+  margin-bottom: 0.28rem;
+  color: var(--accent-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.answer-case-note > textarea,
+.saved-case-note {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.35rem;
+  background: var(--background);
+  padding: 0.45rem 0.5rem;
+  color: var(--foreground);
+  font-size: 0.76rem;
+  line-height: 1.15rem;
+}
+
+.answer-case-note-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+}
+
+.answer-case-note-actions > span {
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+}
+
+.answer-case-note-actions > button,
+.saved-case-save-note,
+.saved-cases-export {
+  display: inline-flex;
+  min-height: 1.75rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border: 1px solid var(--tp-accent);
+  border-radius: 0.35rem;
+  background: var(--tp-accent);
+  padding: 0.25rem 0.55rem;
+  color: #ffffff;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.answer-case-note-actions > button:hover,
+.saved-case-save-note:hover:not(:disabled),
+.saved-cases-export:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.saved-case-save-note:disabled,
+.saved-cases-export:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+/* Saved cases replace the conversation and keep each raw record inspectable. */
+.saved-cases-view {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0.9rem 0.9rem 0.5rem;
+}
+
+.saved-cases-heading {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.saved-cases-heading .settings-title {
+  align-items: flex-start;
+}
+
+.saved-cases-heading h2 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.25rem;
+}
+
+.saved-cases-heading p {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  line-height: 1rem;
+}
+
+.saved-cases-export {
+  flex: none;
+}
+
+.saved-cases-export > svg {
+  width: 0.78rem;
+  height: 0.78rem;
+}
+
+.saved-cases-privacy {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--surface);
+  padding: 0.45rem 0.55rem;
+  color: var(--muted-foreground);
+  font-size: 0.69rem;
+  line-height: 1rem;
+}
+
+.saved-cases-privacy > svg {
+  width: 0.8rem;
+  height: 0.8rem;
+  flex: none;
+  margin-top: 0.08rem;
+  color: var(--tp-accent);
+}
+
+.saved-cases-list {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.65rem;
+  overflow-y: auto;
+  margin-top: 0.7rem;
+  padding-bottom: 0.35rem;
+}
+
+.saved-case-card {
+  flex: none;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--tp-accent);
+  border-radius: 0.45rem;
+  background: var(--surface);
+  padding: 0.65rem 0.7rem 0.6rem;
+}
+
+.saved-case-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.55rem;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  line-height: 1rem;
+}
+
+.saved-case-marker {
+  border-radius: 0.2rem;
+  background: var(--tp-accent);
+  padding: 0 0.34rem;
+  color: #ffffff;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1rem;
+  text-transform: uppercase;
+}
+
+.saved-case-answer {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 0.42rem;
+  color: var(--foreground);
+  font-size: 0.77rem;
+  font-weight: 500;
+  line-height: 1.15rem;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.saved-case-source {
+  display: block;
+  overflow: hidden;
+  margin-top: 0.25rem;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  line-height: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saved-case-source:hover {
+  color: var(--tp-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.saved-case-note-label {
+  display: block;
+  margin-top: 0.5rem;
+  margin-bottom: 0.25rem;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.saved-case-actions {
+  display: flex;
+  min-height: 1.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+.saved-case-icon-action {
+  display: inline-flex;
+  width: 1.75rem;
+  height: 1.75rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.3rem;
+  color: var(--muted-foreground);
+}
+
+.saved-case-icon-action > svg {
+  width: 0.82rem;
+  height: 0.82rem;
+}
+
+.saved-case-icon-action:hover {
+  background: var(--negative-soft);
+  color: var(--destructive);
+}
+
+.saved-case-delete-confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted-foreground);
+  font-size: 0.68rem;
+}
+
+.saved-case-delete-confirm > button {
+  border-radius: 0.28rem;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.saved-case-delete-confirm > button:hover {
+  background: var(--surface-hover);
+}
+
+.saved-case-delete-confirm > .saved-case-delete {
+  background: var(--negative-soft);
+  color: var(--destructive);
+}
+
+.saved-cases-empty {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.35rem;
+  max-width: 25rem;
+  margin-inline: auto;
+  padding: 2rem;
+}
+
+.saved-cases-empty h3 {
+  margin-top: 0.3rem;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.saved-cases-empty p {
+  color: var(--muted-foreground);
+  font-size: 0.74rem;
+  line-height: 1.1rem;
 }
 
 /* Live regions stay mounted; only their contents change. */

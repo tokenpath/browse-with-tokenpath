@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { build } from "vite";
 
 const extensionRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(
@@ -140,6 +141,15 @@ try {
     await mkdir(dirname(destination), { recursive: true });
     await copyFile(join(extensionRoot, relativePath), destination);
   }
+
+  // Never replace the unpacked panel with a build that hides its debug tools.
+  // Compile the store variant in staging, including for direct/CI packaging.
+  await build({
+    root: extensionRoot,
+    configFile: join(extensionRoot, "vite.config.ts"),
+    mode: "store",
+    build: { outDir: join(stagingDir, "sidepanel"), emptyOutDir: false },
+  });
 
   for (const [sourcePath, archivePath] of repoRootFiles) {
     const destination = join(stagingDir, archivePath);

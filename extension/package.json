@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "build": "vite build",
+    "build:debug": "vite build --mode debug",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run check:scripts && npm run build",
     "check:scripts": "tsc -p tsconfig.scripts.json",
@@ -15,7 +16,8 @@
     "test:unit": "node --test test/*.test.cjs",
     "test:e2e": "node test/e2e.mjs",
     "test:e2e:chat": "node test/e2e-chat-citations.mjs",
-    "test": "npm run check && npm run test:unit && npm run test:e2e && npm run test:e2e:chat"
+    "test:e2e:debug": "node test/e2e-debug-build.mjs",
+    "test": "npm run check && npm run test:unit && npm run test:e2e && npm run test:e2e:chat && npm run test:e2e:debug"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

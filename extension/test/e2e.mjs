@@ -310,6 +310,9 @@ function recordDeterministic(good) {
           onRemoved: { addListener() {} },
         },
         runtime: {
+          getManifest() {
+            return { name: "Browse with TokenPath", version: "0.1.0" };
+          },
           async sendMessage(message) {
             if (message?.type === "clear-tab-highlights") {
               window.__panelSent.push([
@@ -575,6 +578,71 @@ function recordDeterministic(good) {
       }
       await setThemePreference("system");
     }
+
+    // A case is durable on the first click. Adding a note is optional and the
+    // exported artifact preserves the exact /v1/attributions body and result.
+    await page.locator(".answer-save-case").click();
+    await page
+      .locator(".answer-case-note textarea")
+      .fill("Summary missed the release caveat.");
+    await page.locator(".answer-case-note-actions button").click();
+    await page.locator("#saved-cases-toggle").click();
+    await page.waitForFunction(
+      () => document.querySelectorAll(".saved-case-card").length === 1
+    );
+    if (process.env.TOKENPATH_PANEL_SCREENSHOT_PREFIX) {
+      await page.screenshot({
+        path: `${process.env.TOKENPATH_PANEL_SCREENSHOT_PREFIX}-saved-cases.png`,
+      });
+    }
+    const savedCaseState = await page.evaluate(async () => {
+      const stored = await new Promise((resolve, reject) => {
+        const open = indexedDB.open("tokenpath-saved-attribution-cases", 1);
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const database = open.result;
+          const request = database
+            .transaction("cases", "readonly")
+            .objectStore("cases")
+            .getAll();
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => {
+            database.close();
+            resolve(request.result);
+          };
+        };
+      });
+      return {
+        countBadge: document.querySelector(".header-saved-count")?.textContent,
+        note: document.querySelector(".saved-case-note")?.value,
+        request: stored[0]?.attributionRequest,
+        response: stored[0]?.attributionResponse,
+      };
+    });
+    const [caseExport] = await Promise.all([
+      page.waitForEvent("download"),
+      page.locator(".saved-cases-export").click(),
+    ]);
+    const exportedCases = JSON.parse(
+      readFileSync(await caseExport.path(), "utf8")
+    );
+    await page.locator(".saved-cases-view .settings-back").click();
+    const savedCaseGood =
+      savedCaseState.countBadge === "1" &&
+      savedCaseState.note === "Summary missed the release caveat." &&
+      savedCaseState.request?.method === "POST" &&
+      savedCaseState.request?.path === "/v1/attributions" &&
+      savedCaseState.request?.body?.document ===
+        (await page.evaluate(() => window.__panelSource)) &&
+      savedCaseState.request?.body?.answer ===
+        (await page.evaluate(() => window.__panelCanonicalSummary)) &&
+      savedCaseState.response?.status === "ready" &&
+      savedCaseState.response?.offsetEncoding === "utf-16" &&
+      savedCaseState.response?.spans?.length === 2 &&
+      exportedCases.schemaVersion === 1 &&
+      exportedCases.app?.name === "Browse with TokenPath" &&
+      exportedCases.cases?.[0]?.note ===
+        "Summary missed the release caveat.";
 
     async function selectAnswerText(startText, endText = startText) {
       const before = await page.evaluate(() => window.__panelSent.length);
@@ -1228,6 +1296,7 @@ function recordDeterministic(good) {
       realLinkBefore === realLinkAfter &&
       firstOptions?.frameId === 9 &&
       boundaryCases.every((item) => item.good);
+    const goodWithSavedCases = good && savedCaseGood;
     console.log("\n### Side-panel attribution fixture");
     console.log(
       `  [stream + server-selected spans + phrase clicks] ${good ? "PASS" : "FAIL"}` +
@@ -1242,7 +1311,8 @@ function recordDeterministic(good) {
         `clickGuide=${panelResult.clickGuide}, click=${clickedSent?.[1]?.start}, ` +
         `boundaries=${boundaryCases.map((item) => `${item.question}:${item.good}`).join(",")}`
     );
-    recordDeterministic(good);
+    console.log(`  saved debug case=${savedCaseGood}`);
+    recordDeterministic(goodWithSavedCases);
   } catch (error) {
     console.log(
       `\n### Side-panel attribution fixture\n  FAIL — ${String(error.message).split("\n")[0]}`

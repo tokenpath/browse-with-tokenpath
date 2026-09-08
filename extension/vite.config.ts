@@ -6,10 +6,13 @@ import { defineConfig } from "vite";
 
 const extensionRoot = path.dirname(fileURLToPath(import.meta.url));
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   base: "./",
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
+    // Unpacked builds keep the tools across rebuilds. The packager explicitly
+    // uses store mode and writes its bundle only into the archive staging area.
+    __TOKENPATH_DEBUG_CASES_ENABLED__: JSON.stringify(mode !== "store"),
   },
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -39,4 +42,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

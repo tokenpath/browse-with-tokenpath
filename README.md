@@ -178,6 +178,25 @@ browser can match it in the page as rendered. Phrases below a confidence
 threshold, and source spans that cannot be tied to exactly one cited page, are
 left unlinked on purpose: a link to the wrong passage is worse than no link.
 
+## Saved debugging cases in local builds
+
+Unpacked builds include the side-panel debugging tools by default. Run
+`npm run build` from `extension/`, reload the extension, and reopen its side
+panel. **Save case** appears after an answer's source mapping finishes; the
+bookmark button in the header opens **Saved debug cases**.
+
+A saved case contains the source URL, the attribution request and result (or
+error), timestamps, and an optional note. Cases persist locally in IndexedDB
+across panel and extension reloads. The saved-cases view supports editing notes,
+deleting individual cases, and exporting JSON. Exports contain the captured
+source text but never API credentials. Clearing a chat or disconnecting does
+not erase cases you explicitly saved.
+
+`npm run build:debug` remains an alias for an unpacked build. Normal builds,
+checks, and tests keep the tools enabled. Store packaging compiles a separate
+variant with the tools disabled directly into its temporary staging directory,
+so creating a store ZIP also leaves your unpacked panel's tools available.
+
 ## Settings
 
 The gear in the header opens Settings in place of the conversation; the back

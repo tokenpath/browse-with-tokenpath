@@ -1,4 +1,5 @@
 import {
+  BookmarkIcon,
   EraserIcon,
   MonitorIcon,
   MoonIcon,
@@ -42,10 +43,12 @@ function nextThemeLabel(snapshot: PanelSnapshot) {
 
 export function PanelHeader({
   controller,
+  savedCasesButtonRef,
   settingsButtonRef,
   snapshot,
 }: {
   controller: PanelController;
+  savedCasesButtonRef?: RefObject<HTMLButtonElement | null>;
   settingsButtonRef?: RefObject<HTMLButtonElement | null>;
   snapshot: PanelSnapshot;
 }) {
@@ -100,6 +103,30 @@ export function PanelHeader({
         >
           <ThemeIcon snapshot={snapshot} />
         </Button>
+        {snapshot.savedCasesEnabled && (
+          <Button
+            aria-controls="saved-cases"
+            aria-expanded={snapshot.savedCasesOpen}
+            aria-label={`Saved debug cases (${snapshot.savedCases.length})`}
+            className={cn(
+              "header-saved-cases",
+              snapshot.savedCasesOpen && "bg-accent text-accent-foreground"
+            )}
+            id="saved-cases-toggle"
+            onClick={controller.toggleSavedCases}
+            ref={savedCasesButtonRef}
+            size="icon-xs"
+            title="Saved debug cases"
+            variant="ghost"
+          >
+            <BookmarkIcon className="size-3.5" />
+            {snapshot.savedCases.length > 0 && (
+              <span className="header-saved-count">
+                {snapshot.savedCases.length}
+              </span>
+            )}
+          </Button>
+        )}
         <Button
           aria-controls="settings"
           aria-expanded={snapshot.settingsOpen}

@@ -4,7 +4,7 @@ The suite has pure/unit coverage for offset math, summary policy, page-chat URL
 identity, and background capture orchestration, plus Playwright integration
 coverage for the side panel and the real content script.
 
-From `extension/`, build the packaged panel and run everything:
+From `extension/`, build the local panel and run everything:
 
 ```bash
 npm install
@@ -13,8 +13,11 @@ npm test
 ```
 
 `npm test` is `npm run check` (typecheck, the `checkJs` pass over the build-free
-scripts, and the Vite build) followed by the unit suite and both browser suites
-(`test:e2e` and `test:e2e:chat`).
+scripts, and the Vite build) followed by the unit suite and browser suites
+(`test:e2e`, `test:e2e:chat`, and `test:e2e:debug`). The debug build regression
+packages the real store ZIP, checks that packaging leaves the local bundle
+unchanged, restores saved cases after panel reopening/reload, and verifies that
+the store panel hides the tools and never opens the saved-case database.
 `setup:test` installs Chromium and runs `setup-libs.sh`, which is a no-op
 outside Debian/Ubuntu — running it on macOS is safe and does nothing.
 

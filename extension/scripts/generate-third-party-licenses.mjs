@@ -52,6 +52,7 @@ async function bundledPackageNames() {
   const result = await build({
     root: extensionRoot,
     configFile: join(extensionRoot, "vite.config.ts"),
+    mode: "store",
     logLevel: "warn",
     build: { write: false, sourcemap: false },
   });
