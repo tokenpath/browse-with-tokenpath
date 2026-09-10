@@ -33,10 +33,6 @@ const TokenPathChatSources = (() => {
   // Fetched HTML above this is not an article. Reading further only costs
   // memory: the readability pass keeps at most MAX_SOURCE_CHARS anyway.
   const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
-  // Open question 4 in the issue. Chosen for the citation-link use: a wrong
-  // link is worse than a missing one, because it moves a claim's apparent
-  // grounding to a passage that does not support it.
-  const MIN_CONFIDENCE = 0.4;
   const HOVER_PASSAGE_CHARS = 120;
   // A cited web page is not a document TokenPath extracted, so a fragment has
   // to match text the browser lays out. Short targets match far more often,
@@ -302,22 +298,14 @@ const TokenPathChatSources = (() => {
    *     source: { start: number, end: number, text: string, confidence: number },
    *   }>,
    *   regions?: Array<{ index: number, url: string, title: string, start: number, end: number, text: string }>,
-   *   minConfidence?: number,
    * }} input
    */
-  function resolveAttributions({ spans, regions, minConfidence } = {}) {
-    const threshold =
-      typeof minConfidence === "number" &&
-      Number.isFinite(minConfidence) &&
-      minConfidence >= 0
-        ? minConfidence
-        : MIN_CONFIDENCE;
+  function resolveAttributions({ spans, regions } = {}) {
     const resolved = [];
     for (const span of Array.isArray(spans) ? spans : []) {
       const answer = span?.answer;
       const source = span?.source;
       if (!answer || !source) continue;
-      if (!(source.confidence >= threshold)) continue;
       const region = regionForSpan(regions, source.start, source.end);
       // A span that straddles two packed sources, or that landed in a header
       // line, names no single page. Dropping it costs one link; guessing
@@ -553,7 +541,6 @@ const TokenPathChatSources = (() => {
     MAX_DOCUMENT_CHARS,
     MAX_ANSWER_CHARS,
     MIN_ANSWER_CHARS,
-    MIN_CONFIDENCE,
     FRAGMENT_OPTIONS,
     extractReadableText,
     hoverTitle,

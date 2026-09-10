@@ -429,25 +429,21 @@ test("each answer span is linked to the page its source span landed in", () => {
   assert.equal(resolved[0].answer.start, 10);
 });
 
-test("a span below the confidence threshold is not linked", () => {
+test("valid spans are linked even with low or zero confidence", () => {
   const { document, regions } = twoSourceFixture();
   const start = document.indexOf("18%");
   const span = {
     answer: { start: 0, end: 3, text: "18%" },
     source: { start, end: start + 3, text: "18%", confidence: 0.2 },
   };
-  assert.equal(
-    ChatSources.resolveAttributions({ regions, spans: [span] }).length,
-    0
-  );
-  assert.equal(
-    ChatSources.resolveAttributions({
+  for (const confidence of [0, 0.2, 0.39, 0.4, 1]) {
+    const resolved = ChatSources.resolveAttributions({
       regions,
-      spans: [span],
-      minConfidence: 0.1,
-    }).length,
-    1
-  );
+      spans: [{ ...span, source: { ...span.source, confidence } }],
+    });
+    assert.equal(resolved.length, 1);
+    assert.equal(resolved[0].source.confidence, confidence);
+  }
 });
 
 test("a span in a header, or across two sources, names no page and is dropped", () => {

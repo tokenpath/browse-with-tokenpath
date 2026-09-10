@@ -97,8 +97,8 @@ added to the page is the links and one status line.
 - **`chat-sources.js`** holds that mode's pure logic: canonical cited URLs,
   the chip-versus-prose test, the readability-style HTML-to-text pass, packing
   several cited pages into the single document `/v1/attributions` takes,
-  mapping returned source spans back onto the page they came from, the
-  confidence threshold, and the badge wording.
+  mapping returned source spans back onto the page they came from, and the
+  badge wording.
 - **`text-fragments.js`** builds `#:~:text=` directives — surrogate-safe
   bounds, bounded prefix/suffix context, `textStart,textEnd` for long targets,
   and percent-encoded fragment grammar. Both source surfaces the extension
@@ -761,8 +761,8 @@ rebased onto the page it landed in, because that page — not the packed
 document — is what a click opens. A span that straddles two sources, or that
 lands in a header rather than in prose, names no single page and is dropped:
 that costs one link, where guessing would move a claim's apparent grounding
-onto the wrong document. Spans below a confidence of `0.4` are dropped for the
-same reason. At most 10 sources are read, 32,000 characters kept per source,
+onto the wrong document. No additional client-side confidence cutoff is applied.
+At most 10 sources are read, 32,000 characters kept per source,
 and the packed document stays inside the endpoint's 400,000-character ceiling.
 
 **Injecting the links.** Every attributed span is resolved against the intact

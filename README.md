@@ -174,9 +174,9 @@ claim can come back unsupported even though the app cited a source; v1 stays
 silent about that rather than guessing. Uploaded PDFs and files are not covered
 — the page only exposes a filename, and the bytes live behind each app's own
 authenticated API. A `#:~:text=` link lands on the passage only where the
-browser can match it in the page as rendered. Phrases below a confidence
-threshold, and source spans that cannot be tied to exactly one cited page, are
-left unlinked on purpose: a link to the wrong passage is worse than no link.
+browser can match it in the page as rendered. No additional client-side
+confidence cutoff is applied. Source spans that cannot be tied to exactly one
+cited page are left unlinked to avoid linking to the wrong document.
 
 ## Saved debugging cases in local builds
 
