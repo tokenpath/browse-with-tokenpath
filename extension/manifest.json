@@ -26,9 +26,6 @@
   "background": {
     "service_worker": "background.js"
   },
-  "side_panel": {
-    "default_path": "sidepanel/panel.html"
-  },
   "content_scripts": [
     {
       "matches": [
