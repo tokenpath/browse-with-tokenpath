@@ -107,6 +107,10 @@ void ensureContextMenus();
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: false })
   .catch(() => {});
+// The panel is per tab: opening it on one tab must not show it (or let it be
+// closed) on every other tab. Keep the window-wide panel off and enable it
+// only on the tabs it was opened for, in captureAndOpen.
+chrome.sidePanel.setOptions({ enabled: false }).catch(() => {});
 
 chrome.action.onClicked.addListener((tab) => {
   if (!tab || tab.id == null) return;
@@ -161,6 +165,17 @@ async function captureAndOpen(intent, info, tab, openPanel = true) {
   // opening the panel can take seconds and dynamic pages (notably Gmail) may
   // replace the selected DOM nodes in that time.
   if (openPanel) {
+    // Not awaited either: setOptions and open are queued in order, and open
+    // still runs inside the gesture.
+    chrome.sidePanel
+      .setOptions({
+        tabId,
+        path: `sidepanel/panel.html?tabId=${tabId}`,
+        enabled: true,
+      })
+      .catch((e) => {
+        console.error("[TokenPath] sidePanel.setOptions failed:", e);
+      });
     chrome.sidePanel.open({ tabId }).catch((e) => {
       console.error("[TokenPath] sidePanel.open failed:", e);
     });

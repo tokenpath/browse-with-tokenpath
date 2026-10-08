@@ -1818,9 +1818,9 @@ function recordDeterministic(good) {
     recordDeterministic(good);
 
     // Switching tabs must leave the PDF alone as well. Re-seed the panel, own
-    // a fragment again, then activate a different tab: the panel drops the
-    // highlight and invalidates the pending operation without ever asking the
-    // worker to clear — a clear would navigate a tab the user just left.
+    // a fragment again, then activate a different tab: the tab-scoped panel
+    // is merely hidden by Chrome, so it neither clears the highlight (which
+    // would navigate the PDF tab) nor drops the chat.
     await page.evaluate(
       ({ source, sourceUrl }) => {
         window.__pdfRuntimeListeners[0]?.({
@@ -1875,14 +1875,7 @@ function recordDeterministic(good) {
         listener({ tabId: 555, windowId: 12 });
       }
     });
-    await page.waitForFunction(
-      (count) =>
-        window.__pdfRuntimeMessages.filter(
-          (message) => message.type === "cancel-pdf-source-operation"
-        ).length > count,
-      switchCounts.cancels
-    );
-    await page.waitForTimeout(50);
+    await page.waitForTimeout(80);
     const afterSwitch = await page.evaluate(
       (counts) => ({
         clears:
@@ -1900,8 +1893,8 @@ function recordDeterministic(good) {
     );
     const switchGood =
       afterSwitch.clears === 0 &&
-      afterSwitch.cancels === 1 &&
-      afterSwitch.messageCount === 0;
+      afterSwitch.cancels === 0 &&
+      afterSwitch.messageCount > 0;
     console.log(
       `  [tab switch leaves the PDF untouched] ${switchGood ? "PASS" : "FAIL"}` +
         ` — clears=${afterSwitch.clears}, cancels=${afterSwitch.cancels}, ` +
@@ -2938,51 +2931,14 @@ function recordDeterministic(good) {
       };
     });
 
+    // The panel is tab-scoped: Chrome hides it on other tabs, and this
+    // document stays bound to tab 411. Activating another tab, or a capture
+    // that belongs to one, must leave this tab's chat exactly as it was.
     await page.waitForTimeout(40);
     await page.evaluate(() => {
       for (const listener of window.__intentTabActivatedListeners) {
         listener({ tabId: 412, windowId: 23 });
       }
-    });
-    await page.waitForFunction(
-      () =>
-        document.getElementById("context")?.hidden === true &&
-        document.getElementById("summarize-starter") &&
-        document.getElementById("input")?.disabled === false &&
-        document.querySelectorAll("[data-answer-content]").length === 0
-    );
-    await page.locator("#summarize-starter").click();
-    await page.waitForFunction(
-      () =>
-        document
-          .getElementById("context-text")
-          ?.textContent?.includes("Reading this page") &&
-        document.getElementById("input")?.disabled === true
-    );
-    await page.evaluate(() => {
-      window.__intentRuntimeListeners[0]?.({
-        type: "selection-captured",
-        captureId: "tab-b-empty-seed",
-        capturedAt: 19,
-        tabId: 412,
-        windowId: 23,
-        frameId: 0,
-        captureMode: "full-page",
-        sourceType: "page",
-        url: "https://docs.example/tab-b",
-        text: "",
-        error: "No readable text was found on this page.",
-      });
-    });
-    await page.waitForFunction(
-      () =>
-        document
-          .getElementById("messages")
-          ?.textContent?.includes("no readable text on this page yet") &&
-        document.getElementById("summarize-starter") &&
-        document.getElementById("input")?.disabled === false
-    );
-    await page.evaluate(() => {
       window.__intentRuntimeListeners[0]?.({
         type: "selection-captured",
         captureId: "tab-b-seed",
@@ -2993,64 +2949,18 @@ function recordDeterministic(good) {
         captureMode: "full-page",
         sourceType: "page",
         url: "https://docs.example/tab-b",
-        text:
-          "Tab B contains a separate captured document about release planning, " +
-          "deployment gates, rollback checks, and operational ownership.",
+        text: "Tab B contains a separate captured document.",
         error: null,
       });
     });
-    await page.waitForFunction(
-      () =>
-        document
-          .getElementById("context-text")
-          ?.textContent?.includes("Tab B contains") &&
-        document.getElementById("input")?.disabled === false
-    );
-    await page.waitForTimeout(40);
-    await page.evaluate(() => {
-      for (const listener of window.__intentTabActivatedListeners) {
-        listener({ tabId: 411, windowId: 23 });
-      }
-    });
-    await page.waitForFunction(
-      () =>
-        document
-          .querySelector("[data-answer-content]")
-          ?.textContent?.includes("shortened review cycles")
-    );
-    const tabAAfterReturn = await page.evaluate(() => ({
+    await page.waitForTimeout(80);
+    const tabAAfterSwitch = await page.evaluate(() => ({
       answerCount: document.querySelectorAll("[data-answer-content]").length,
+      answer:
+        document.querySelector("[data-answer-content]")?.textContent || "",
       context:
         document.getElementById("context-text")?.textContent || "",
     }));
-    await page.evaluate(() => {
-      for (const listener of window.__intentTabActivatedListeners) {
-        listener({ tabId: 412, windowId: 23 });
-      }
-    });
-    await page.waitForFunction(
-      () =>
-        document
-          .getElementById("context-text")
-          ?.textContent?.includes("Tab B contains") &&
-        document.querySelectorAll("[data-answer-content]").length === 0
-    );
-    const tabBAfterReturn = await page.evaluate(() => ({
-      answerCount: document.querySelectorAll("[data-answer-content]").length,
-      context:
-        document.getElementById("context-text")?.textContent || "",
-      inputDisabled: document.getElementById("input")?.disabled,
-    }));
-    await page.evaluate(() => {
-      for (const listener of window.__intentTabActivatedListeners) {
-        listener({ tabId: 411, windowId: 23 });
-      }
-    });
-    await page.waitForFunction(() =>
-      document
-        .querySelector("[data-answer-content]")
-        ?.textContent?.includes("shortened review cycles")
-    );
 
     await page.evaluate(() => {
       const awayUrl = "https://docs.example/another-page";
@@ -3369,12 +3279,10 @@ function recordDeterministic(good) {
       askResult.document ===
         (await page.evaluate(() => window.__intentAskSource)) &&
       askResult.answer.includes("shortened review cycles") &&
-      tabAAfterReturn.answerCount === 1 &&
-      tabAAfterReturn.context ===
+      tabAAfterSwitch.answerCount === 1 &&
+      tabAAfterSwitch.answer.includes("shortened review cycles") &&
+      tabAAfterSwitch.context ===
         (await page.evaluate(() => window.__intentAskSource)) &&
-      tabBAfterReturn.answerCount === 0 &&
-      tabBAfterReturn.context.includes("Tab B contains") &&
-      tabBAfterReturn.inputDisabled === false &&
       restoredChat.answer.includes("shortened review cycles") &&
       restoredChat.inputDisabled === false &&
       restoredChat.notice === "" &&

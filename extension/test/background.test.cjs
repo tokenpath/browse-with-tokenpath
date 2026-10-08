@@ -161,6 +161,10 @@ const chrome = {
     setPanelBehavior() {
       return Promise.resolve();
     },
+    setOptions(options) {
+      calls.push(["sidePanel.setOptions", options]);
+      return Promise.resolve();
+    },
     // Deliberately never resolves: capture must not wait for panel animation.
     open(options) {
       calls.push(["sidePanel.open", options]);
@@ -412,6 +416,28 @@ assert.ok(installedHandler, "context-menu installer registered");
   assert.ok(
     toolbarCalls.some(([name]) => name === "sidePanel.open"),
     "toolbar click opens the side panel"
+  );
+  const panelOptionsIndex = toolbarCalls.findIndex(
+    ([name, options]) =>
+      name === "sidePanel.setOptions" &&
+      options?.tabId === 40 &&
+      options.enabled === true &&
+      options.path === "sidepanel/panel.html?tabId=40"
+  );
+  assert.ok(
+    panelOptionsIndex >= 0 &&
+      panelOptionsIndex <
+        toolbarCalls.findIndex(([name]) => name === "sidePanel.open"),
+    "the panel is enabled for the clicked tab only, before it opens"
+  );
+  assert.ok(
+    calls.some(
+      ([name, options]) =>
+        name === "sidePanel.setOptions" &&
+        options?.tabId == null &&
+        options?.enabled === false
+    ),
+    "the window-wide panel stays disabled"
   );
   const toolbarCapture = toolbarCalls.find(
     ([name, tabId, message]) =>

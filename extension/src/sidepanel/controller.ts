@@ -435,6 +435,24 @@ export class PanelController {
 
   getSnapshot = () => this.snapshot;
 
+  // background.js opens each panel at panel.html?tabId=N; the active tab is
+  // only a fallback for a panel loaded some other way.
+  private async ownerTab(): Promise<chrome.tabs.Tab | undefined> {
+    const ownerParam = new URLSearchParams(
+      globalThis.location?.search || ""
+    ).get("tabId");
+    const ownerId = ownerParam ? Number(ownerParam) : NaN;
+    if (Number.isInteger(ownerId) && ownerId >= 0) {
+      const owner = await chrome.tabs.get(ownerId).catch(() => undefined);
+      if (owner) return owner;
+    }
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    return tab;
+  }
+
   async init() {
     this.watchTab();
     void this.initChatCitations();
@@ -442,10 +460,7 @@ export class PanelController {
     const savedCasesReady = __TOKENPATH_DEBUG_CASES_ENABLED__
       ? this.loadSavedCases()
       : Promise.resolve();
-    const [tab] = await chrome.tabs.query({
-      active: true,
-      currentWindow: true,
-    });
+    const tab = await this.ownerTab();
     this.tabId = tab?.id ?? null;
     this.windowId = tab?.windowId ?? null;
     this.sourceBaseUrl = websiteBaseUrl(tab?.url);
@@ -2607,15 +2622,9 @@ export class PanelController {
   }
 
   private watchTab() {
-    chrome.tabs.onActivated?.addListener((activeInfo) => {
-      if (
-        activeInfo.tabId === this.tabId &&
-        activeInfo.windowId === this.windowId
-      ) {
-        return;
-      }
-      void this.handleTabActivation(activeInfo.tabId, activeInfo.windowId);
-    });
+    // The panel is tab-scoped (background.js enables it per tab), so it stays
+    // bound to the tab it was opened for. Chrome hides it on other tabs rather
+    // than this document following the active tab around.
     chrome.tabs.onUpdated.addListener((id, changeInfo) => {
       if (id !== this.tabId || !changeInfo.url) return;
       // A fragment-only change is scroll position, not navigation: a plain
@@ -2628,63 +2637,6 @@ export class PanelController {
     chrome.tabs.onRemoved.addListener((id) => {
       if (id === this.tabId) this.invalidate("The tab was closed.", false);
     });
-  }
-
-  private async handleTabActivation(tabId: number, windowId: number) {
-    const navigationEpoch = ++this.navigationEpoch;
-    await this.persistCurrentPageChat();
-    if (navigationEpoch !== this.navigationEpoch) return;
-
-    // Switching tabs is not a request to touch the tab being left behind. A
-    // PDF clear used to navigate that tab, which reloaded the PDF — and reset
-    // its viewer to page 1 — every time the user glanced at another tab.
-    if (this.sourceType === "chrome-pdf") {
-      this.cancelHighlightWithoutClearing();
-    } else {
-      this.cancelHighlightAndClear();
-    }
-    this.cancelActiveWork();
-    this.invalidated = true;
-    this.context = "";
-    this.history = [];
-    // The pending toolbar summary belonged to the tab being left behind.
-    this.setAutoSummaryRequest(false);
-    this.contextVersion++;
-    this.tabId = tabId;
-    this.windowId = windowId;
-    this.frameId = 0;
-    this.captureId = null;
-    this.captureMode = "selection";
-    this.update({
-      busy: false,
-      contextError: null,
-      contextLabel: "Current page",
-      contextStatus: "idle",
-      contextText: "",
-      hasContext: false,
-      messages: [],
-      notice: null,
-      sourceType: "page",
-    });
-
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (
-      !tab ||
-      navigationEpoch !== this.navigationEpoch ||
-      tabId !== this.tabId
-    ) {
-      return;
-    }
-    this.sourceUrl = tab.url || null;
-    this.sourceBaseUrl = websiteBaseUrl(this.sourceUrl);
-    const restored = await this.restorePageChat(
-      null,
-      this.contextVersion,
-      false
-    );
-    if (!restored && navigationEpoch === this.navigationEpoch) {
-      this.prepareUncapturedPage();
-    }
   }
 
   private async handlePageNavigation(url: string) {
