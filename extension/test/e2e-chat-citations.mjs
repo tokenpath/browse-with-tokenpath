@@ -115,8 +115,9 @@ const PHRASES = [
   },
 ];
 
-async function installShim(page) {
-  await page.evaluate((phrases) => {
+async function installShim(page, initialStored = {}) {
+  await page.evaluate(({ phrases, initialStored }) => {
+    window.__tokenpathStored = initialStored;
     window.__tokenpathCalls = [];
     window.__tokenpathReply = null;
     const listeners = [];
@@ -179,7 +180,7 @@ async function installShim(page) {
         onChanged: { addListener: (listener) => listeners.push(listener) },
       },
     };
-  }, PHRASES);
+  }, { phrases: PHRASES, initialStored });
 }
 
 async function linkReport(page) {
@@ -229,8 +230,25 @@ async function run() {
 async function chatgptSuite(context) {
   const page = await context.newPage();
   await page.goto("https://chatgpt.com/c/1");
-  await installShim(page);
+  // Even a true legacy setting is not consent to the current disclosure.
+  await installShim(page, { chatCitations: { enabled: true } });
   await page.evaluate(BUNDLE);
+  await page.evaluate(() => {
+    const stop = document.querySelector('[data-testid="stop-button"]');
+    stop.remove();
+    document.querySelector("#answer .markdown p").append(document.createTextNode(""));
+    window.__tokenpathStop = stop;
+  });
+  await page.waitForTimeout(SETTLE_MS + 400);
+  const beforeConsent = await linkReport(page);
+  equal(beforeConsent.count, 0, "no links before opt-in, even with legacy enabled");
+  equal(beforeConsent.calls, 0, "no runtime message before opt-in");
+  await page.evaluate(() => {
+    document.body.append(window.__tokenpathStop);
+    return window.chrome.storage.local.set({
+      chatCitationsConsentV1: { enabled: true, disabledHosts: [] },
+    });
+  });
 
   // The stop button is still in the DOM: the turn is not finished, however
   // quiet the message subtree is.
@@ -362,7 +380,7 @@ async function chatgptSuite(context) {
   equal(disabled.badges, 0, "turning the site off removes the badge too");
   equal(disabled.processed, 0, "turning the site off clears the processed marks");
   check(
-    disabled.stored.chatCitations.disabledHosts.includes("chatgpt.com"),
+    disabled.stored.chatCitationsConsentV1.disabledHosts.includes("chatgpt.com"),
     "the per-host switch is persisted for the next page load",
     JSON.stringify(disabled.stored)
   );
@@ -391,7 +409,7 @@ async function chatgptSuite(context) {
 async function claudeSuite(context) {
   const page = await context.newPage();
   await page.goto("https://claude.ai/chat/1");
-  await installShim(page);
+  await installShim(page, { chatCitationsConsentV1: { enabled: true } });
   await page.evaluate(BUNDLE);
 
   await page.waitForTimeout(SETTLE_MS + 400);

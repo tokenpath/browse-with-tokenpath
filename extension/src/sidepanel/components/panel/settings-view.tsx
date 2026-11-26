@@ -28,16 +28,19 @@ function SettingSwitch({
   checked,
   id,
   label,
+  descriptionId,
   onChange,
 }: {
   checked: boolean;
   id: string;
   label: string;
+  descriptionId?: string;
   onChange: (next: boolean) => void;
 }) {
   return (
     <button
       aria-checked={checked}
+      aria-describedby={descriptionId}
       aria-label={label}
       className={cn("setting-switch", checked && "is-on")}
       id={id}
@@ -176,15 +179,19 @@ export function SettingsView({
             <div className="setting-name" id="setting-chat-citations-label">
               Cite sources in ChatGPT and Claude
             </div>
-            <p className="setting-desc">
-              When an answer on chatgpt.com or claude.ai cites the web, link
-              its phrases to the passage each one came from. Any single site
-              you switch off from the answer itself comes back on with this.
+            <p className="setting-desc" id="setting-chat-citations-description">
+              Off by default. If enabled, TokenPath automatically fetches cited
+              pages without your cookies and receives the preceding question,
+              assistant answer, and cited page text and URLs (which may include
+              paths and query parameters) to link answers to sources. This works
+              without opening the side panel. Turning it on resets any sites you
+              previously turned off.
             </p>
           </div>
           <SettingSwitch
             checked={settings.chatCitations}
             id="setting-chat-citations"
+            descriptionId="setting-chat-citations-description"
             label="Cite sources in ChatGPT and Claude"
             onChange={controller.setChatCitations}
           />

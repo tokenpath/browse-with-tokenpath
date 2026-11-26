@@ -17,7 +17,7 @@ This repository holds the extension alone — there is no server in it and no
 self-hosted mode. The account is free to create and the panel walks through it
 on first run.
 
-The same attribution also runs on answers this extension did not generate. On
+You can opt in to attribution for answers this extension did not generate. On
 `chatgpt.com` and `claude.ai`, **chat citation mode** turns the phrases of a
 finished, web-citing assistant message into links that open each cited page at
 the passage supporting that phrase — instead of a chip at the end of a sentence
@@ -137,11 +137,13 @@ not a passage — so it is rarely clicked, and when it is, you land at the top o
 a long article and have to find the sentence yourself. Chat citation mode
 replaces that with links on the words themselves.
 
-Nothing to turn on and nothing to click. On `chatgpt.com` and `claude.ai`, when
-an assistant message finishes and cites the web, the extension reads the cited
-pages, asks TokenPath which phrases of the answer each page supports, and
-underlines those phrases. Clicking one opens that page in a new tab, scrolled to
-the supporting passage; hovering names the site and quotes the passage.
+Off by default. Enable **Cite sources in ChatGPT and Claude** in Settings to
+opt in. When enabled, an eligible web-citing answer triggers source reads and
+attribution automatically, without a toolbar click. TokenPath receives the
+preceding question, assistant answer, and the text and normalized URLs of the
+cited pages it could read. These URLs may include paths and query parameters.
+The extension fetches sources without browser-session cookies. Clicking an
+underlined phrase opens the supporting passage in a new tab.
 
 One quiet line under the answer says what happened:
 
@@ -208,7 +210,7 @@ arrow or Escape returns. It holds five preferences, stored locally, and a
 - **Default summary**: **3 bullets** or **Detailed**. Applies to automatic
   summaries and to the **Summarize** action.
 - **Suggest follow-up questions** (on). Off hides the suggestion row entirely.
-- **Cite sources in ChatGPT and Claude** (on). Chat citation mode, above. This
+- **Cite sources in ChatGPT and Claude** (off by default). Chat citation mode, above. This
   one is shared with those pages rather than kept in the panel, so switching it
   on also clears any single site you had turned off from the answer itself.
 - **Summary instructions** (advanced, collapsed). The box is preloaded with the

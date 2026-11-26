@@ -280,7 +280,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.type === "chat-citations-attribute") {
-    attributeChatAnswer(message)
+    attributeChatAnswer(message, _sender?.url)
       .then((result) => sendResponse(result))
       .catch(() =>
         sendResponse({ ok: false, error: "couldn't attribute this answer" })
@@ -809,7 +809,35 @@ const CHAT_SOURCE_TIMEOUT_MS = 8_000;
 const MAX_CACHED_CHAT_SOURCES = 32;
 const chatSourceCache = new Map();
 
-async function attributeChatAnswer(message) {
+const CHAT_CITATIONS_CONSENT_KEY = "chatCitationsConsentV1";
+const CHAT_CITATIONS_ORIGINS = new Set([
+  "https://chatgpt.com",
+  "https://chat.openai.com",
+  "https://claude.ai",
+]);
+
+/** @param {string | undefined} senderUrl */
+async function canAttributeChatAnswer(senderUrl) {
+  if (!senderUrl) return false;
+  try {
+    const { origin, hostname } = new URL(senderUrl);
+    if (!CHAT_CITATIONS_ORIGINS.has(origin)) return false;
+    const stored = await chrome.storage.local.get(CHAT_CITATIONS_CONSENT_KEY);
+    const preference = /** @type {{enabled?: unknown, disabledHosts?: unknown} | undefined} */ (
+      stored?.[CHAT_CITATIONS_CONSENT_KEY]
+    );
+    return preference?.enabled === true &&
+      !(Array.isArray(preference.disabledHosts) &&
+        preference.disabledHosts.includes(hostname));
+  } catch {
+    return false;
+  }
+}
+
+async function attributeChatAnswer(message, senderUrl) {
+  if (!(await canAttributeChatAnswer(senderUrl))) {
+    return { ok: false, error: "chat citations are off" };
+  }
   const answer = typeof message?.answer === "string" ? message.answer : "";
   const question =
     typeof message?.question === "string" && message.question.trim()
@@ -846,6 +874,11 @@ async function attributeChatAnswer(message) {
       attributions: [],
       stats: { requested: urls.length, fetched: 0, spans: 0 },
     };
+  }
+
+  // A user may switch citations off while the source reads are in flight.
+  if (!(await canAttributeChatAnswer(senderUrl))) {
+    return { ok: false, error: "chat citations are off" };
   }
 
   let spans;
