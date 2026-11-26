@@ -70,7 +70,8 @@
   const MESSAGE_KEY_ATTR = "data-tokenpath-message";
   const BADGE_ATTR = "data-tokenpath-badge";
   const LINK_CLASS = "tokenpath-attr";
-  const STORAGE_KEY = "chatCitations";
+  // Do not inherit the legacy preference, which defaulted to on without disclosure.
+  const STORAGE_KEY = "chatCitationsConsentV1";
   // One entry per distinct answer, so an edited or regenerated answer gets a
   // new one. Bounded: a long conversation must not grow this without limit.
   const MAX_CACHED_ANSWERS = 40;
@@ -138,7 +139,7 @@
   // Our own injection mutates the message subtree. Without this the observer
   // would treat the injection as a fresh edit and rescan forever.
   let injecting = false;
-  let enabled = true;
+  let enabled = false;
   let disabledHosts = [];
 
   function isEnabled() {
@@ -683,7 +684,7 @@
   }
 
   function onMutations(records) {
-    if (injecting) return;
+    if (injecting || !isEnabled()) return;
     const now = Date.now();
     let touched = false;
     for (const record of records) {
@@ -750,7 +751,7 @@
   }
 
   function readPreference(value) {
-    enabled = value?.enabled !== false;
+    enabled = value?.enabled === true;
     disabledHosts = Array.isArray(value?.disabledHosts)
       ? value.disabledHosts.filter((host) => typeof host === "string")
       : [];
@@ -771,8 +772,10 @@
       characterData: true,
     });
 
+    let sawPreferenceChange = false;
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "local" || !changes[STORAGE_KEY]) return;
+      sawPreferenceChange = true;
       readPreference(changes[STORAGE_KEY].newValue);
       if (isEnabled()) scan();
       else clearInjections();
@@ -781,10 +784,11 @@
     chrome.storage.local
       .get(STORAGE_KEY)
       .then((stored) => {
+        if (sawPreferenceChange) return;
         readPreference(stored?.[STORAGE_KEY]);
         if (isEnabled()) scan();
       })
-      .catch(() => scan());
+      .catch(() => {}); // Stay off when storage cannot be read.
   }
 
   const hostname = typeof location === "undefined" ? "" : location.hostname;

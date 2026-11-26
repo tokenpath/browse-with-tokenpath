@@ -15,8 +15,8 @@ phrase or choosing one from the answer's **Sources** list highlights its returne
 supporting source range, and scrolls there in the live page or PDF — or, for a
 transcript capture, seeks the player to the caption cue that supports it.
 
-The same attribution also runs on somebody else's answer. In **chat citation
-mode** the extension watches `chatgpt.com` and `claude.ai`, and when an
+After explicit opt-in, the same attribution can run on somebody else's answer.
+In **chat citation mode** the extension watches `chatgpt.com` and `claude.ai`, and when an
 assistant message that cites the web finishes rendering it reads the cited
 pages, attributes that answer against them, and turns the attributed phrases
 into links that open each source at its supporting passage. No side panel and
@@ -54,7 +54,7 @@ added to the page is the links and one status line.
    whether new pages are summarized automatically, which summary shape is the
    default, whether follow-ups are suggested, whether chat citation mode runs
    on ChatGPT and Claude, and — collapsed — the summary instructions themselves.
-7. Chat citation mode needs no entry point. On `chatgpt.com` and `claude.ai`,
+7. After opt-in in Settings, on `chatgpt.com` and `claude.ai`,
    a finished assistant message with at least one web citation gets its
    attributed phrases underlined within a few seconds, plus one status line
    saying how many cited pages were read and how many phrases were linked.
@@ -346,11 +346,11 @@ defensive — an unreadable or hand-edited value falls back to the default:
 | Summary instructions | `tokenpath-summary-instructions` | unset |
 
 One more switch — **Cite sources in ChatGPT and Claude** — sits with them but
-is stored differently, in `chrome.storage.local` under `chatCitations` as
-`{ enabled, disabledHosts }`, because the code that honours it is a content
-script on those pages rather than this panel. It therefore arrives after the
-first render, and reads as on until it does, which is the same default the
-content script applies. The panel owns `enabled`; the badge on a chat page owns
+is stored in `chrome.storage.local` under `chatCitationsConsentV1` as
+`{ enabled, disabledHosts }`, shared by the panel, content script and worker.
+Only an explicit `enabled: true` turns it on. The old key is not consent and
+is not migrated. The worker checks the sender and consent before source reads
+and checks consent again before attribution. The panel owns `enabled`; the badge on a chat page owns
 `disabledHosts`. Switching the panel toggle on clears `disabledHosts`, so "on"
 means on everywhere and the two surfaces can never disagree about what was
 last asked for.

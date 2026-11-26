@@ -80,10 +80,10 @@ function emitTabCommit(tabId, url) {
   }
 }
 
-function dispatchRuntimeMessage(message) {
+function dispatchRuntimeMessage(message, sender = {}) {
   return new Promise((resolve, reject) => {
     try {
-      const keepAlive = runtimeMessageHandler(message, {}, resolve);
+      const keepAlive = runtimeMessageHandler(message, sender, resolve);
       assert.strictEqual(
         keepAlive,
         true,
@@ -1460,8 +1460,37 @@ assert.ok(installedHandler, "context-menu installer registered");
     ];
   };
 
+  const chatSender = { url: "https://chatgpt.com/c/test" };
+  const dispatchChat = (message) => dispatchRuntimeMessage(message, chatSender);
+  const blockedChat = {
+    type: "chat-citations-attribute",
+    answer: CHAT_ANSWER,
+    question: "What happened?",
+    urls: ["https://a.example/one"],
+  };
+  const beforeBlocked = fetchCalls.length;
+  assert.strictEqual((await dispatchChat(blockedChat)).ok, false);
+  localStore.set("chatCitations", { enabled: true });
+  assert.strictEqual((await dispatchChat(blockedChat)).ok, false);
+  localStore.set("chatCitationsConsentV1", { enabled: false });
+  const previousKey = localStore.get("tokenpathKey");
+  localStore.delete("tokenpathKey");
+  assert.strictEqual((await dispatchChat(blockedChat)).ok, false);
+  if (previousKey) localStore.set("tokenpathKey", previousKey);
+  localStore.set("chatCitationsConsentV1", {
+    enabled: true, disabledHosts: ["chatgpt.com"],
+  });
+  assert.strictEqual((await dispatchChat(blockedChat)).ok, false);
+  localStore.set("chatCitationsConsentV1", { enabled: true, disabledHosts: [] });
+  assert.strictEqual((await dispatchRuntimeMessage(blockedChat, {
+    url: "https://other.example/",
+  })).ok, false);
+  assert.strictEqual(fetchCalls.length, beforeBlocked,
+    "no source or attribution fetch before consent or from a blocked site");
+  console.log("PASS: chat attribution is gated before any network work");
+
   const chatFetchStart = fetchCalls.length;
-  const chatResult = await dispatchRuntimeMessage({
+  const chatResult = await dispatchChat({
     type: "chat-citations-attribute",
     answer: CHAT_ANSWER,
     question: "What happened to the rate in June?",
@@ -1530,7 +1559,7 @@ assert.ok(installedHandler, "context-menu installer registered");
 
   const warmFetchStart = fetchCalls.length;
   attributionRequests = [];
-  const warmResult = await dispatchRuntimeMessage({
+  const warmResult = await dispatchChat({
     type: "chat-citations-attribute",
     answer: `${CHAT_ANSWER} A second answer in the same conversation.`,
     question: "And after that?",
@@ -1548,7 +1577,7 @@ assert.ok(installedHandler, "context-menu installer registered");
 
   attributionRequests = [];
   attributionSpansFor = () => [];
-  const streamedResult = await dispatchRuntimeMessage({
+  const streamedResult = await dispatchChat({
     type: "chat-citations-attribute",
     answer: CHAT_ANSWER,
     question: "How much warming?",
@@ -1561,7 +1590,7 @@ assert.ok(installedHandler, "context-menu installer registered");
   );
   console.log("PASS: a cited page read in chunks decodes whole characters");
 
-  const noSourceResult = await dispatchRuntimeMessage({
+  const noSourceResult = await dispatchChat({
     type: "chat-citations-attribute",
     answer: CHAT_ANSWER,
     question: "What happened?",
@@ -1575,7 +1604,7 @@ assert.ok(installedHandler, "context-menu installer registered");
     spans: 0,
   });
 
-  const unreadableResult = await dispatchRuntimeMessage({
+  const unreadableResult = await dispatchChat({
     type: "chat-citations-attribute",
     answer: CHAT_ANSWER,
     question: "What happened?",
@@ -1590,7 +1619,7 @@ assert.ok(installedHandler, "context-menu installer registered");
   assert.strictEqual([...unreadableResult.attributions].length, 0);
   console.log("PASS: unreadable or absent sources report instead of attributing");
 
-  const shortResult = await dispatchRuntimeMessage({
+  const shortResult = await dispatchChat({
     type: "chat-citations-attribute",
     answer: "Yes.",
     question: "Did it?",
@@ -1599,7 +1628,7 @@ assert.ok(installedHandler, "context-menu installer registered");
   assert.strictEqual(shortResult.ok, false);
 
   localStore.delete("tokenpathKey");
-  const disconnectedResult = await dispatchRuntimeMessage({
+  const disconnectedResult = await dispatchChat({
     type: "chat-citations-attribute",
     answer: CHAT_ANSWER,
     question: "What happened?",
@@ -1613,6 +1642,33 @@ assert.ok(installedHandler, "context-menu installer registered");
   );
   localStore.set("tokenpathKey", "tp-test-key");
   console.log("PASS: chat citation failures come back as badge wording");
+
+  const originalChatFetch = fetchImpl;
+  let sourceStarted;
+  let finishSource;
+  const started = new Promise((resolve) => { sourceStarted = resolve; });
+  const source = new Promise((resolve) => { finishSource = resolve; });
+  fetchImpl = (url, options) => {
+    if (url === "https://pending.example/source") {
+      sourceStarted();
+      return source;
+    }
+    return originalChatFetch(url, options);
+  };
+  const beforeRevoke = fetchCalls.length;
+  const pendingAttribution = dispatchChat({
+    ...blockedChat, urls: ["https://pending.example/source"],
+  });
+  await started;
+  localStore.set("chatCitationsConsentV1", { enabled: false });
+  finishSource(htmlResponse("This source was started before the user opted out."));
+  assert.strictEqual((await pendingAttribution).ok, false);
+  assert.strictEqual(fetchCalls.length, beforeRevoke + 1,
+    "revoking consent during a source read prevents the attribution request");
+  fetchImpl = originalChatFetch;
+  localStore.delete("chatCitationsConsentV1");
+  localStore.delete("chatCitations");
+  console.log("PASS: turning chat citations off during a source read blocks attribution");
 
   console.log("\nAll background assertions passed.");
 })().catch((error) => {

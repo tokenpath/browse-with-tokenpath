@@ -116,7 +116,7 @@ export interface PanelSettings {
    * Chat citation mode on chatgpt.com and claude.ai. Unlike every other
    * preference here this one lives in chrome.storage.local, because the
    * content script that reads it runs on those pages rather than in this
-   * panel. It therefore arrives after the first render; `true` until then,
+   * panel. It therefore arrives after the first render; off until then,
    * which is the same default chat-citations.js applies.
    */
   chatCitations: boolean;
@@ -194,7 +194,8 @@ const SUMMARY_INSTRUCTIONS_KEY = "tokenpath-summary-instructions";
 // chrome.storage.local, shared with chat-citations.js. The stored value is
 // `{ enabled, disabledHosts }`; the panel owns `enabled`, and the badge on a
 // chat page owns the per-host list.
-const CHAT_CITATIONS_KEY = "chatCitations";
+// The previous key did not represent consent to the disclosed data flow.
+const CHAT_CITATIONS_KEY = "chatCitationsConsentV1";
 const MAX_GENERATE_INPUT_CHARS = 420_000;
 const MAX_GENERATE_MESSAGES = 50;
 // TokenPath caps `max_output_tokens` at 2048 and bills generation from the
@@ -271,7 +272,7 @@ function readPanelSettings(): PanelSettings {
   );
   return {
     autoSummarize: readBooleanPreference(AUTO_SUMMARIZE_KEY, true),
-    chatCitations: true,
+    chatCitations: false,
     summaryPreset: preset === "detailed" ? "detailed" : "bullets",
     suggestFollowUps: readBooleanPreference(SUGGEST_FOLLOWUPS_KEY, true),
     customSummaryPrompt: custom.trim() ? custom : null,
@@ -1007,19 +1008,17 @@ export class PanelController {
 
   /**
    * Read the shared chat-citation preference. A failure leaves the switch
-   * reading on, which is what the content script does too — the panel must
-   * not invent an "off" the chat pages are not honouring.
+   * off, which is also how the content script handles a failed read.
    */
   private async initChatCitations() {
     try {
       const stored = await chrome.storage.local.get(CHAT_CITATIONS_KEY);
       const value = stored?.[CHAT_CITATIONS_KEY];
       this.updateSettings({
-        chatCitations: (value as { enabled?: boolean } | undefined)?.enabled !==
-          false,
+        chatCitations: (value as { enabled?: boolean } | undefined)?.enabled === true,
       });
     } catch {
-      // Keep the optimistic default.
+      // Keep the default off.
     }
   }
 
